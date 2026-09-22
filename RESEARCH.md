@@ -90,6 +90,13 @@ Defaults verified in code: `-c` = `max(NumCPU/2, 1)`; `-depth 10`; `-zoom 15`; `
 
 Zybble therefore implements **its own** `scrapemate.ResultWriter` that persists progressively (small batches, short time window, transaction per batch) instead of reusing either, while keeping the engine's completion accounting intact (`WriterManagedCompletion`, `exiter.Exiter`, `CompletionTracker`).
 
+**Verified against the module source at `scrapemate` v1.4.0** (fetched 2026-09-22; `result.go`, `services.go`, `scrapemateapp/scrapemateapp.go`):
+
+* `scrapemate.Result` is exactly `{Job IJob; Data any}` and the writer contract is a single method, `Run(ctx, <-chan Result) error`. **There is no per-result error channel**, and `ScrapemateApp.Start` runs each writer inside an `errgroup` that cancels the whole run when a writer returns an error. A Zybble writer must therefore never fail for one unparseable row: it logs, skips it, and keeps the run alive (Zybble keeps only the first error and returns it *after* the results channel closes).
+* `Start(ctx, seedJobs ...IJob) error` pushes the seed jobs itself and waits for the writers and the scraper; `Close() error` only closes the cacher (browsers are released when the app shuts down). Zybble's `RunScrape` calls exactly those two methods.
+* **`gmaps.Entry.ID` is not an input reference**, even though its JSON tag is `input_id`: `gmaps/multiple.go` sets it to Google's business token (fast mode) and `gmaps/place.go` sets it to `j.ParentID` (standard mode). Per-input attribution must come from the seed job id — `result.Job.GetID()`, which Zybble sets to `search_inputs.id` — and never from the entry.
+* `CompletionTracker.SeedDiscovered(jobID, len(next))` fires once per pagination round with the number of place jobs spawned in that round (so Zybble accumulates per input), and the exiter's completion condition is `seedCompleted >= seedCount && placesCompleted >= placesFound`. Both are usable as reported, with no invented progress.
+
 ### 2.4 Engine completion/exit accounting
 
 * `exiter.New()` → `SetSeedCount`, `SetCancelFunc`, `IncrSeedCompleted/PlacesFound/PlacesCompleted`, `Run(ctx)` cancels the scrape when seeds and places are all accounted for.
@@ -132,7 +139,7 @@ The docs state plainly: *"Supabase is deprecating the `anon` and `service_role` 
 * Secret key → server only (maps to `service_role`, bypasses RLS).
 * Legacy `anon`/`service_role` JWTs continue to work until disabled in the dashboard.
 
-**Consequence:** the brief's env names `VITE_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are the *legacy* names. Zybble accepts **both** conventions (new preferred) and documents the mapping; see `.env.example` and `docs/DEPLOYMENT.md`.
+**Consequence:** the brief's env names `VITE_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` are the *legacy* names. Zybble accepts **both** conventions (new preferred) and documents the mapping; see `.env.example` and `DEPLOYMENT.md`.
 
 ### 4.2 RLS
 
@@ -188,6 +195,7 @@ Design consequence: all Razorpay calls go through `BillingProvider` with a `RAZO
 |---|---|---|
 | `github.com/sutarorg/zybblesaas` @ `2944802` | 2026-09-22 | routes, screens, contracts, demo systems |
 | `github.com/gosom/google-maps-scraper` @ `549e4b5e` (v1.18.1) | 2026-09-22 | engine integration, flags, data model, exit/completion, proxies, Docker |
+| `github.com/gosom/scrapemate` @ `v1.4.0` (module source) | 2026-09-22 | `ResultWriter`/`Start`/`Close` contract, result shape, `CompletionTracker`, exiter interface |
 | ai.google.dev/gemini-api/docs/models | 2026-09-22 | model identifiers & deprecations |
 | supabase.com/docs/guides/getting-started/api-keys | 2026-09-22 | publishable/secret key migration |
 | supabase.com/docs/guides/database/postgres/row-level-security | 2026-09-22 | grants-before-policies, RLS patterns |
@@ -202,7 +210,9 @@ Design consequence: all Razorpay calls go through `BillingProvider` with a `RAZO
 
 ---
 
-## 8. Discrepancies between the brief and current official documentation
+## 8. Discrepancies, doc conflicts and implementation contracts
+
+Numbered continuously; items 1–9 are places where current official documentation (or the source itself) contradicts the brief, items 10–14 are contracts that had to be pinned down in code after inspecting the engines and libraries.
 
 1. **Supabase key names (docs beat prompt).** Brief §173/§174 use `*_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`. Current docs deprecate those by end of 2026. → Implementation accepts `SUPABASE_PUBLISHABLE_KEY`/`SUPABASE_SECRET_KEY` **and** the legacy names; documented in README/DEPLOYMENT.
 2. **`gemini-2.5-pro` is no longer the frontier model (still available).** The models page on 2026-09-22 lists Gemini 3.8 Flash as current stable, Gemini 3.1 Pro (preview), and still lists `gemini-2.5-pro` under the 2.5 family (Gemini 2.0 Flash and 3 Pro Preview are shut down). The brief's model remains valid, so `GEMINI_MODEL=gemini-2.5-pro` is the shipped default — configurable in one place, with a deprecations-page link in the README so the model can be swapped without code changes.
@@ -212,7 +222,13 @@ Design consequence: all Razorpay calls go through `BillingProvider` with a `RAZO
 6. **Frontend Stripe copy.** `src/app/pages5.tsx` contains Stripe/SCA copy and fake Visa/Mastercard rows; replaced with Razorpay-checkout copy and provider-backed payment metadata (brief §348/§352).
 7. **Gosom's own SaaS.** Present in the repo (`cmd/gmapssaas`, `rqueue`, `admin`, `api`, `gmaps_jobs`/`results` tables). Explicitly **not** deployed as Zybble's backend (brief §27); Gosom is consumed as a Go library.
 8. **`-resume` scope.** Gosom's resume is file-scrape append mode; pause/rerun semantics are therefore implemented in Zybble's queue (input-level progress + dedupe), and Zybble does **not** claim checkpoint-level resume of a half-finished Google Maps crawl. Search progress is tracked per query input, so a resumed search re-issues only inputs that never reported discovery, and idempotent lead upserts prevent double counting.
-9. **Radius units.** Gosom's `-radius` is **metres** while the UI label is **km** → the API contract uses `radius_km` and converts to metres exactly once (documented in `server/services/searchConfig.ts`), avoiding a mixed-unit bug.
+9. **Radius units.** Gosom's `-radius` is **metres** while the UI label is **km** → the API contract uses `radius_km` and converts to metres exactly once (`api/searches/index.ts` writes `radius_m`, `zoom` and the grid cell; the API contract and the DB column are both explicit about units), avoiding a mixed-unit bug.
+
+10. **One scrape job per engine pass (implementation contract, not a doc conflict).** The API queues a `scrape` job per `search_inputs` row — `{search_id, input_id, seq}` with dedupe key `search:<sid>:input:<iid>` — while recovery jobs (`cleanup`) and pause/resume carry only `search_id`. The worker must honour `input_id` and refuse to re-run a pass that already finished; running "all pending passes" for every job would have repeated work and could have finalised a search while other passes were still queued. **Fixed in the worker** (`jobs.go` scrape handler + `Store.LoadInput`/`BumpInputAttempts`, `Store.FinishSearch` now returns whether the search actually closed).
+11. **`scrapemate` v1.4.0 has no per-result error channel.** Per-input failure therefore cannot be reported by the engine; Zybble derives it from engine callbacks plus the rows actually persisted, and treats a pass cut short by the safety deadline as `partial` unless **nothing** was persisted. This is a deliberate, documented substitute for a signal the engine does not provide.
+12. **`gmaps.Entry.ID` carries Google's identifier in fast mode** (see §2.3). Any other writer that trusted the `input_id` JSON tag would write a non-UUID into a UUID column; Zybble's writer tags each entry with the seed job id instead.
+13. **AI cache keys are only meaningful if both producers agree.** The API (`api/_lib/ai-runs.ts` `inputHash`) and the worker now hash the same parts with the same algorithm (sha256 over the JSON array, first 40 hex characters). The prompts are genuinely different (the worker's system text and evidence layout differ from `api/ai/analyze.ts`), so the **prompt version** — `lead-analysis@1` vs `lead-analysis-worker@1` vs `lead-scoring@1` — is what separates the cache entries, not the hash algorithm. Using different hash algorithms (as an earlier revision did) would have double-charged quota for identical work.
+14. **`DISABLE_TELEMETRY=1` is enforced in code, not just documented.** `config.Load()` re-forces it unless it was explicitly set to `"0"`, so the Google Maps engine never emits telemetry from a Zybble worker by accident.
 
 ---
 
@@ -235,3 +251,10 @@ Design consequence: all Razorpay calls go through `BillingProvider` with a `RAZO
 | D13 | Rate limiting + idempotency implemented with Postgres-backed counters/locks (no extra infrastructure) | Brief §167/§166/§391 |
 | D14 | Lead quality score is deterministic coverage math computed in SQL/TS from captured fields | Brief §34: no invented values |
 | D15 | `geo_places` table + optional client coordinates for fast mode/grid; no Google geocoding dependency | Brief §26/§288 + finding 3 in §8 |
+| D16 | A `scrape` job = **one engine pass** (`search_inputs` row), payload `{search_id, input_id, seq}`; recovery jobs carry only `search_id` and mean "whatever is still open" | Per-pass jobs give honest per-pass progress, bounded blast radius on crash, and make redelivery idempotent. The API already enqueues per pass; the worker matches it (finding 10 in §8) |
+| D17 | A search is finalised **only when no pass is open**, and only the call that closes it notifies the workspace | Prevents "completed at 100 %" while seven other passes are still queued, and prevents duplicate completion notifications |
+| D18 | Per-pass outcome is derived from engine callbacks + persisted rows: `completed`, or `partial` when a run is cut short with data, or `failed` only when nothing was persisted | The engine reports no per-result error (§8 finding 11); this is the strongest truthful statement the signals support |
+| D19 | One shared analysis cache-key algorithm (sha256 of a JSON array of parts, 40 hex chars) with **per-producer prompt versions** (`lead-analysis@1`, `lead-analysis-worker@1`, `lead-scoring@1`) | The API and worker share a cache namespace without pretending their prompts are identical; quota `usage_reserve` keys stay stable across retries (§8 finding 13) |
+| D20 | The engine's deadline is only a safety net: per-input minutes × queued passes, clamped to 10–45 minutes, while completion is decided by the exit monitor / inactivity exit and the job lease is renewed by heartbeats | A wedged browser cannot hold a lease forever, and a healthy long crawl is never killed by an arbitrary global timer |
+| D21 | Notification emails are queued from `notify_workspace` (`ops.queue_enqueue('notification', …)`, dedupe `notification:<id>`) and `emailed_at` is set only after the provider accepts | Retries cannot mail the same notification twice, and "not emailed" stays distinguishable from "emailed" |
+| D22 | Authorization is centralised in `route()`: auth mode + API-key scopes + workspace role + per-caller rate limit are declared next to the handler | One place to audit; a route cannot forget a check without it being visible in the route definition |

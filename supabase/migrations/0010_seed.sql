@@ -2,7 +2,7 @@
 -- Zybble · 0010 · seed data: plans, geo centroids, operational defaults
 --
 -- Razorpay plan ids are NOT seeded here (they are environment-specific): set
--- them through the deployment configuration, see docs/DEPLOYMENT.md.
+-- them through the deployment configuration, see DEPLOYMENT.md §2 (Razorpay).
 -- ============================================================================
 
 insert into public.plans (

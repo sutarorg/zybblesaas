@@ -22,8 +22,12 @@ import (
 )
 
 const (
-	aiPromptVersionScoring  = "lead-scoring@1"
-	aiPromptVersionAnalysis = "lead-analysis@1"
+	aiPromptVersionScoring = "lead-scoring@1"
+	// The worker's analysis prompt is its own (different system text and
+	// evidence layout from api/ai/analyze.ts), so it carries its own prompt
+	// version. That is what stops a worker analysis from being served as a
+	// cache hit for an API analysis of the same lead, and vice versa.
+	aiPromptVersionAnalysis = "lead-analysis-worker@1"
 )
 
 type Worker struct {
@@ -86,14 +90,14 @@ func (p *liveProgress) update(seedCompleted, placesFound, placesCompleted int, d
 	p.delivered = delivered
 }
 
-func (p *liveProgress) snapshot() (int, int, int, map[string]int) {
+func (p *liveProgress) snapshotDelivered() map[string]int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := map[string]int{}
 	for key, value := range p.delivered {
 		out[key] = value
 	}
-	return p.seedCompleted, p.placesFound, p.placesCompleted, out
+	return out
 }
 
 func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, error) {
@@ -118,26 +122,53 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		return map[string]any{"skipped": true, "reason": "search already finished", "status": search.Status}, nil
 	}
 
-	inputs, err := w.Store.PendingInputs(ctx, searchID)
-	if err != nil {
-		return nil, err
-	}
-	if len(inputs) == 0 {
-		status, err := w.Store.FinishSearch(ctx, searchID)
+	// The API queues one scrape job per engine pass (payload carries input_id).
+	// Recovery jobs carry only search_id and mean "pick up whatever is open".
+	inputID := stringValue(job.Payload, "input_id")
+
+	var inputs []store.Input
+	if inputID != "" {
+		input, err := w.Store.LoadInput(ctx, searchID, inputID)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"skipped": true, "reason": "nothing left to scrape", "status": status}, nil
+		if input == nil {
+			return map[string]any{"skipped": true, "reason": "engine pass no longer exists"}, nil
+		}
+		// Redelivery of a job whose pass already finished must do nothing at all:
+		// expensive work has to be idempotent across worker restarts.
+		switch input.Status {
+		case "completed", "skipped", "cancelled":
+			return map[string]any{"skipped": true, "reason": "engine pass already finished", "status": input.Status}, nil
+		}
+		inputs = []store.Input{*input}
+	} else {
+		inputs, err = w.Store.PendingInputs(ctx, searchID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(inputs) == 0 {
+		status, finished, err := w.Store.FinishSearch(ctx, searchID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"skipped": true, "reason": "nothing left to scrape", "status": status, "finished": finished}, nil
 	}
 
 	if err := w.Store.MarkSearchRunning(ctx, searchID, w.Config.WorkerID, engineVersion()); err != nil {
 		return nil, err
 	}
 
+	started := make([]string, 0, len(inputs))
 	for _, input := range inputs {
 		if err := w.Store.InputProgress(ctx, searchID, input.ID, "running", nil, nil, nil); err != nil {
 			return nil, err
 		}
+		started = append(started, input.ID)
+	}
+	if err := w.Store.BumpInputAttempts(ctx, searchID, started); err != nil {
+		return nil, err
 	}
 
 	_ = w.Store.Event(ctx, searchID, "engine_started", "info",
@@ -225,9 +256,27 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		return nil, err
 	}
 
-	status, err := w.Store.FinishSearch(ctx, searchID)
+	status, finished, err := w.Store.FinishSearch(ctx, searchID)
 	if err != nil {
 		return nil, err
+	}
+
+	_ = w.Store.Event(ctx, searchID, "engine_finished", levelForStatus(status),
+		fmt.Sprintf("Engine pass finished: %d pass%s completed, %d failed", completed, plural(completed), failed),
+		map[string]any{"entries": result.Entries, "new_leads": result.NewLeads, "duplicates": result.Duplicates})
+
+	// Other engine passes may still be queued or running: the search is not over
+	// until the last one closes it. Only that call notifies the workspace.
+	if !finished {
+		return map[string]any{
+			"status":             status,
+			"finished":           false,
+			"inputs_completed":   completed,
+			"inputs_failed":      failed,
+			"entries_persisted":  result.Entries,
+			"finished_naturally": result.FinishedNaturally,
+			"worker":             w.Config.WorkerID,
+		}, nil
 	}
 
 	summary, err := w.Store.SearchSummary(ctx, searchID)
@@ -254,17 +303,14 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 			map[string]any{"search_id": search.ID, "slug": search.Slug, "status": status})
 	}
 
-	_ = w.Store.Event(ctx, searchID, "engine_finished", levelForStatus(status),
-		fmt.Sprintf("Engine finished: %d pass%s completed, %d failed", completed, plural(completed), failed),
-		map[string]any{"entries": result.Entries, "new_leads": result.NewLeads, "duplicates": result.Duplicates})
-
 	return map[string]any{
-		"status":              status,
-		"inputs_completed":    completed,
-		"inputs_failed":       failed,
-		"entries_persisted":   result.Entries,
-		"finished_naturally":  result.FinishedNaturally,
-		"worker":              w.Config.WorkerID,
+		"status":             status,
+		"finished":           true,
+		"inputs_completed":   completed,
+		"inputs_failed":      failed,
+		"entries_persisted":  result.Entries,
+		"finished_naturally": result.FinishedNaturally,
+		"worker":             w.Config.WorkerID,
 	}, nil
 }
 
@@ -288,9 +334,13 @@ func (w *Worker) progressLoop(ctx context.Context, searchID, jobID string, progr
 				return
 			}
 
-			seedCompleted, placesFound, placesCompleted, delivered := progress.snapshot()
+			delivered := progress.snapshotDelivered()
 			for inputID, completed := range delivered {
 				count := completed
+				// `completed` is how many places are already persisted for this
+				// input. Reusing it as `discovered` is a deliberate lower bound:
+				// every persisted place was by definition discovered, and the
+				// exact engine figure replaces it when the input's pass ends.
 				if err := w.Store.InputProgress(ctx, searchID, inputID, "running", &count, &count, nil); err != nil {
 					w.Log.Warn("input progress failed", "input", inputID, "error", err)
 				}
@@ -583,22 +633,38 @@ func (w *Worker) aiLeads(ctx context.Context, job store.Job, mode string) (map[s
 			return nil, err
 		}
 
-		hash := store.AnalysisInputHash(mode, contextData.ID, contextData.BusinessName, strconv.Itoa(contextData.QualityScore), strconv.Itoa(len(contextData.Emails)), w.Config.GeminiModel)
+		task := "LEAD_SCORING"
+		promptVersion := aiPromptVersionScoring
+		if mode == "analyze" {
+			task = "LEAD_ANALYSIS"
+			promptVersion = aiPromptVersionAnalysis
+		}
 
-		allowed, err := w.Store.ReserveAiRun(ctx, workspaceID, limit, "ai-"+mode+":"+workspaceID+":"+hash, "lead", leadID)
+		// Canonical cache key: the same parts, in the same order, hashed by the
+		// same algorithm as api/ai/analyze.ts (inputHash). Keep the two in step.
+		hash := store.AnalysisInputHash(
+			promptVersion,
+			contextData.ID,
+			contextData.QualityScore,
+			contextData.EmailCount,
+			contextData.ReviewSample,
+			w.Config.GeminiModel,
+		)
+
+		// A reservation is keyed by what was actually computed, so a lead that is
+		// analysed twice with unchanged inputs is only charged once.
+		reserveKey := "ai-lead:" + workspaceID + ":" + hash
+		if mode != "analyze" {
+			reserveKey = "ai-score:" + workspaceID + ":" + hash
+		}
+
+		allowed, err := w.Store.ReserveAiRun(ctx, workspaceID, limit, reserveKey, "lead", leadID)
 		if err != nil {
 			return nil, err
 		}
 		if !allowed {
 			quotaStopped++
 			continue
-		}
-
-		task := "LEAD_SCORING"
-		promptVersion := aiPromptVersionScoring
-		if mode == "analyze" {
-			task = "LEAD_ANALYSIS"
-			promptVersion = aiPromptVersionAnalysis
 		}
 
 		runID, err := w.Store.StartAiRun(ctx, workspaceID, task, w.Config.GeminiModel, promptVersion, hash, &leadID, nil)
@@ -684,7 +750,7 @@ func (w *Worker) generateForLead(ctx context.Context, mode string, lead *store.L
 		"website: " + nonEmpty(lead.Website, "none"),
 		"phone: " + nonEmpty(lead.Phone, "none"),
 		"email: " + nonEmpty(lead.EmailPrimary, "none"),
-		"emails_discovered: " + strconv.Itoa(len(lead.Emails)),
+		"emails_discovered: " + strconv.Itoa(lead.EmailCount),
 		"rating: " + ratingText(lead),
 		"reviews: " + strconv.Itoa(lead.ReviewCount),
 		"profile_completeness: " + strconv.Itoa(lead.QualityScore) + "/100",

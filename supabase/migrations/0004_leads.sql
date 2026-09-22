@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Zybble · 0004 · leads (globally deduplicated canonical records)
 --
--- Ownership model (see docs/ARCHITECTURE.md §data model):
+-- Ownership model (see ARCHITECTURE.md §2.3 (data model):
 --   * leads                  → canonical business record, not workspace owned
 --   * workspace_leads        → "this workspace has this lead" (the unit of quota)
 --   * search_leads           → this lead was discovered by this search

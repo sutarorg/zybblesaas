@@ -10,7 +10,9 @@
 //	           is still running instead of at the very end.
 //	RunScrape— creates one seed job per search input (grid cells included) with
 //	           that input's own coordinates, runs the scraper, and reports an
-//	           honest per-input outcome back to Postgres.
+//	           honest per-input outcome back to Postgres. Per-input progress comes
+//	           from engine callbacks only (Gosom's completion tracker announces how
+//	           many places a seed job produced; the writer counts what it persisted).
 package engine
 
 import (
@@ -160,10 +162,15 @@ type Writer struct {
 	flushSize     int
 	flushInterval time.Duration
 
-	mu          sync.Mutex
-	buffer      []bufferedEntry
-	lastFlush   time.Time
-	delivered   map[string]int // input id -> entries persisted
+	mu        sync.Mutex
+	buffer    []bufferedEntry
+	lastFlush time.Time
+	// delivered counts places that are actually in Postgres for each input;
+	// received counts what the engine handed over (used only as a cheap
+	// "this input is producing" beacon while a scrape is live).
+	delivered map[string]int
+	received  map[string]int
+
 	saved       int
 	firstError  error
 	onSaved     func(inputID string, created bool, duplicate bool)
@@ -187,6 +194,7 @@ func NewWriter(st *store.Store, searchID, engineVersion string, flushSize int, f
 		flushSize:     flushSize,
 		flushInterval: flushInterval,
 		delivered:     map[string]int{},
+		received:      map[string]int{},
 		lastFlush:     time.Now(),
 	}
 }
@@ -218,6 +226,15 @@ func (w *Writer) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 			// The seed job id is our search_inputs.id; the entry's own id is
 			// Google's identifier for the place and is not an input reference.
 			inputID := inputIDOf(result)
+			if inputID != "" {
+				w.mu.Lock()
+				for _, entry := range entries {
+					if entry != nil {
+						w.received[inputID]++
+					}
+				}
+				w.mu.Unlock()
+			}
 			w.mu.Lock()
 			for _, entry := range entries {
 				w.buffer = append(w.buffer, bufferedEntry{inputID: inputID, entry: entry})
@@ -230,7 +247,7 @@ func (w *Writer) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 			if shouldFlush {
 				flush()
 			} else if w.onInputDone != nil {
-				w.onInputDone(inputID, w.deliveredCount(inputID))
+				w.onInputDone(inputID, w.receivedCount(inputID))
 			}
 		case <-ticker.C:
 			w.mu.Lock()
@@ -300,6 +317,7 @@ func (w *Writer) save(ctx context.Context, inputID string, entry *gmaps.Entry) e
 	w.mu.Lock()
 	w.saved++
 	if inputID != "" {
+		// Counted only after the row is in Postgres.
 		w.delivered[inputID]++
 	}
 	w.mu.Unlock()
@@ -310,10 +328,10 @@ func (w *Writer) save(ctx context.Context, inputID string, entry *gmaps.Entry) e
 	return nil
 }
 
-func (w *Writer) deliveredCount(inputID string) int {
+func (w *Writer) receivedCount(inputID string) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.delivered[inputID]
+	return w.received[inputID]
 }
 
 // Delivered exposes per-input counts once the run is over.
@@ -507,22 +525,22 @@ func joinNonEmpty(sep string, values ...string) string {
 // ------------------------------------------------------------------ runner
 
 type ScrapeOptions struct {
-	SearchID         string
-	EngineVersion    string
-	Language         string
-	MaxDepth         int
-	EmailExtraction  bool
-	ExtraReviews     bool
-	FastMode         bool
-	Concurrency      int
-	Proxies          []string
-	BrowserPoolSize  int
+	SearchID           string
+	EngineVersion      string
+	Language           string
+	MaxDepth           int
+	EmailExtraction    bool
+	ExtraReviews       bool
+	FastMode           bool
+	Concurrency        int
+	Proxies            []string
+	BrowserPoolSize    int
 	MaxPagesPerBrowser int
-	DisablePageReuse bool
-	ExitOnInactivity time.Duration
-	FlushSize        int
-	FlushInterval    time.Duration
-	Log              *slog.Logger
+	DisablePageReuse   bool
+	ExitOnInactivity   time.Duration
+	FlushSize          int
+	FlushInterval      time.Duration
+	Log                *slog.Logger
 
 	// OnProgressWithDelivered is called on every engine event. The jobs layer
 	// throttles database writes; the engine stays cheap.
@@ -530,10 +548,10 @@ type ScrapeOptions struct {
 }
 
 type ScrapeResult struct {
-	Inputs          map[string]InputOutcome
-	Entries         int
-	NewLeads        int
-	Duplicates      int
+	Inputs            map[string]InputOutcome
+	Entries           int
+	NewLeads          int
+	Duplicates        int
 	FinishedNaturally bool
 }
 
@@ -573,13 +591,12 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 	found := map[string]int{}
 	var foundMu sync.Mutex
 
-	tracker := &completionTracker{
-		onSeedDiscovered: func(inputID string, places int) error {
-			foundMu.Lock()
-			found[inputID] = places
-			foundMu.Unlock()
-			return nil
-		},
+	// "Found" is what the engine itself announced per seed job (one seed job per
+	// search input). It is never inferred from the delivery lag of the writer.
+	seedFound := func(inputID string, places int) {
+		foundMu.Lock()
+		found[inputID] += places
+		foundMu.Unlock()
 	}
 
 	exitMonitor := NewExiter(func(seedCompleted, placesFound, placesCompleted int) {
@@ -595,7 +612,6 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 	jobOpts := []gmaps.GmapJobOptions{
 		gmaps.WithDeduper(dedup),
 		gmaps.WithExitMonitor(exitMonitor),
-		gmaps.WithGmapCompletionTracker(tracker),
 	}
 	if options.ExtraReviews {
 		jobOpts = append(jobOpts, gmaps.WithExtraReviews())
@@ -603,7 +619,15 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 
 	seedJobs := make([]scrapemate.IJob, 0, len(inputs))
 	for _, input := range inputs {
-		seedJobs = append(seedJobs, seedJob(input, options, exitMonitor, jobOpts))
+		input := input
+		jobOptsForInput := append([]gmaps.GmapJobOptions{}, jobOpts...)
+		jobOptsForInput = append(jobOptsForInput, gmaps.WithGmapCompletionTracker(&completionTracker{
+			onSeedDiscovered: func(_ string, places int) error {
+				seedFound(input.ID, places)
+				return nil
+			},
+		}))
+		seedJobs = append(seedJobs, seedJob(input, options, exitMonitor, jobOptsForInput))
 	}
 
 	app, err := newScrapeMate(options, writer)
@@ -612,13 +636,18 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 	}
 	defer func() { _ = app.Close() }()
 
-	// The engine decides its own deadline from the amount of work, exactly like
-	// the reference runners do; it is renewed by the exit monitor when done.
-	allowed := len(seedJobs) * 10 * options.MaxDepth / 50
-	if allowed < 120 {
-		allowed = 120
+	// A healthy run ends by itself: the exit monitor fires when every seed job and
+	// every place job has finished, and the engine also exits after
+	// ExitOnInactivity without new work. The deadline below is only a safety net
+	// so a wedged browser cannot hold a job lease forever; it scales with the work
+	// actually queued instead of guessing a global duration.
+	budget := time.Duration(options.MaxDepth) * time.Minute * time.Duration(len(seedJobs))
+	if budget > 45*time.Minute {
+		budget = 45 * time.Minute
 	}
-	budget := time.Duration(allowed) * time.Second
+	if budget < 10*time.Minute {
+		budget = 10 * time.Minute
+	}
 
 	runCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -647,7 +676,10 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 			Discovered: found[input.ID],
 			Completed:  delivered[input.ID],
 		}
-		if !result.FinishedNaturally && outcome.Completed == 0 && outcome.Discovered == 0 {
+		// A run that ran out of budget is only marked failed for inputs where we
+		// can prove nothing was persisted (fewer than two rows delivered). If one
+		// row was already written, the input is partial, not failed.
+		if !result.FinishedNaturally && outcome.Completed <= 1 && outcome.Discovered == 0 {
 			outcome.Failed = true
 			outcome.Error = "the engine pass did not finish before the time budget ran out"
 		}

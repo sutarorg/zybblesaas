@@ -1,12 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -34,6 +34,11 @@ type LeadContext struct {
 	PriceRange     string
 	SocialCount    int
 	ReviewsSnippet string
+	// EmailCount and ReviewSample participate in the analysis cache key. They
+	// mirror what the API samples when it builds the same key: at most 10 emails
+	// and at most 5 reviews.
+	EmailCount   int
+	ReviewSample int
 }
 
 func (s *Store) LeadContext(ctx context.Context, leadID, workspaceID string) (*LeadContext, error) {
@@ -55,14 +60,21 @@ func (s *Store) LeadContext(ctx context.Context, leadID, workspaceID string) (*L
 		       l.phone, l.email_primary, l.rating, l.review_count, l.quality_score, l.description, l.status,
 		       l.price_range,
 		       (select count(*) from public.lead_social_profiles sp where sp.lead_id = l.id),
-		       coalesce((select string_agg(left(coalesce(r.text_original, ''), 160), ' | ') from public.lead_reviews r where r.lead_id = l.id), ''),
-		       coalesce((select array_agg(e.email::text order by e.is_primary desc, e.email) from public.lead_emails e where e.lead_id = l.id), '{}')
+		       coalesce((
+		         select string_agg(left(coalesce(r.text_original, ''), 160), ' | ' order by r.published_at desc)
+		           from (select text_original, published_at from public.lead_reviews where lead_id = l.id
+		                  order by published_at desc limit 5) r
+		       ), ''),
+		       coalesce((select array_agg(e.email::text order by e.is_primary desc, e.email) from public.lead_emails e where e.lead_id = l.id), '{}'),
+		       least((select count(*) from public.lead_emails e where e.lead_id = l.id), 10),
+		       least((select count(*) from public.lead_reviews r where r.lead_id = l.id), 5)
 		  from public.leads l
 		  join public.workspace_leads wl on wl.lead_id = l.id and wl.workspace_id = $2
 		 where l.id = $1 and l.deleted_at is null`, leadID, workspaceID).
 		Scan(&lead.ID, &lead.WorkspaceID, &lead.BusinessName, &category, &city, &state, &country, &website,
 			&phone, &email, &rating, &lead.ReviewCount, &lead.QualityScore, &descript, &lead.Status,
-			&priceRange, &lead.SocialCount, &lead.ReviewsSnippet, &lead.Emails)
+			&priceRange, &lead.SocialCount, &lead.ReviewsSnippet, &lead.Emails,
+			&lead.EmailCount, &lead.ReviewSample)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -129,10 +141,23 @@ func (s *Store) ListWorkspace(ctx context.Context, listID string) (string, strin
 	return workspaceID, name, err
 }
 
-// AnalysisInputHash mirrors the API's hashing so a lead analysed by either
-// component is served from the same cache entry.
-func AnalysisInputHash(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+// AnalysisInputHash is the canonical Zybble analysis cache key, byte-for-byte
+// the same algorithm as the API's `inputHash` helper
+// (api/_lib/ai-runs.ts): sha256 over the JSON array of the parts, hex, first 40
+// characters. Any change here must be mirrored there and in the prompt version.
+func AnalysisInputHash(parts ...any) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	// Node's JSON.stringify does not escape <, > or &; Go's default marshaler
+	// does. Disabling it here is what keeps the two byte-identical.
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(parts); err != nil {
+		// Only reachable for types JSON cannot encode; those must never be used
+		// as hash parts, so fall back to a value that cannot match anything.
+		return ""
+	}
+	payload := bytes.TrimRight(buf.Bytes(), "\n")
+	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])[:40]
 }
 

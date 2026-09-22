@@ -223,19 +223,19 @@ func (s *Store) LoadSearch(ctx context.Context, searchID string) (*Search, error
 }
 
 type Input struct {
-	ID          string
-	Seq         int
-	QueryText   string
-	Lat         *float64
-	Lon         *float64
-	Zoom        *int
-	RadiusM     *int
-	GridCell    *string
-	Status      string
-	Discovered  int
-	Completed   int
-	Attempts    int
-	LastError   *string
+	ID         string
+	Seq        int
+	QueryText  string
+	Lat        *float64
+	Lon        *float64
+	Zoom       *int
+	RadiusM    *int
+	GridCell   *string
+	Status     string
+	Discovered int
+	Completed  int
+	Attempts   int
+	LastError  *string
 }
 
 // PendingInputs returns the inputs that still need engine work, in sequence
@@ -266,6 +266,39 @@ func (s *Store) PendingInputs(ctx context.Context, searchID string) ([]Input, er
 	return inputs, rows.Err()
 }
 
+// LoadInput fetches one engine pass by id, scoped to its search so a job can
+// never touch another search's work.
+func (s *Store) LoadInput(ctx context.Context, searchID, inputID string) (*Input, error) {
+	var input Input
+	err := s.pool.QueryRow(ctx, `
+		select id, seq, query_text, geo_lat, geo_lon, zoom, radius_m, grid_cell, status,
+		       places_discovered, places_completed, attempts, last_error
+		  from public.search_inputs
+		 where id = $1 and search_id = $2`, inputID, searchID).
+		Scan(&input.ID, &input.Seq, &input.QueryText, &input.Lat, &input.Lon, &input.Zoom,
+			&input.RadiusM, &input.GridCell, &input.Status, &input.Discovered, &input.Completed,
+			&input.Attempts, &input.LastError)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load input: %w", err)
+	}
+	return &input, nil
+}
+
+// BumpInputAttempts counts engine passes that actually started, so a search log
+// can distinguish "never ran" from "ran and failed".
+func (s *Store) BumpInputAttempts(ctx context.Context, searchID string, inputIDs []string) error {
+	if len(inputIDs) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`update public.search_inputs set attempts = attempts + 1
+		  where search_id = $1 and id::text = any($2)`, searchID, inputIDs)
+	return err
+}
+
 func (s *Store) CountInputs(ctx context.Context, searchID string) (total int, done int, err error) {
 	err = s.pool.QueryRow(ctx, `
 		select count(*)::int,
@@ -293,10 +326,12 @@ func (s *Store) SetSearchPhase(ctx context.Context, searchID, phase string) erro
 	return err
 }
 
-// FinishSearch derives the terminal status from the real input outcome.
-func (s *Store) FinishSearch(ctx context.Context, searchID string) (string, error) {
-	var status string
-	err := s.pool.QueryRow(ctx, `
+// FinishSearch derives the terminal status from the real input outcome, and
+// only when no engine pass is still open. It returns the (possibly unchanged)
+// status plus whether this call was the one that closed the search, so callers
+// can send exactly one completion notification.
+func (s *Store) FinishSearch(ctx context.Context, searchID string) (status string, finished bool, err error) {
+	err = s.pool.QueryRow(ctx, `
 		with state as (
 			select
 				count(*)::int as total,
@@ -304,30 +339,56 @@ func (s *Store) FinishSearch(ctx context.Context, searchID string) (string, erro
 				count(*) filter (where status = 'failed')::int as failed,
 				count(*) filter (where status in ('pending', 'running'))::int as open
 			  from public.search_inputs where search_id = $1
+		),
+		-- FOR UPDATE makes two passes finishing at the same moment serialize:
+		-- the second one waits, re-reads the committed status and therefore
+		-- never reports itself as the call that closed the search.
+		before as (
+			select status from public.searches where id = $1 for update
 		)
 		update public.searches s
 		   set status = case
 				 when s.status = 'cancelled' then 'cancelled'
+				 when s.status in ('completed', 'partial', 'failed') then s.status
+				 when state.open > 0 then s.status
 				 when state.completed = 0 and state.failed > 0 then 'failed'
 				 when state.failed > 0 then 'partial'
 				 else 'completed'
 			   end,
-		       phase = case when state.failed > 0 and state.completed = 0 then 'failed' else 'done' end,
-		       progress_percent = case when state.failed > 0 and state.completed = 0 then progress_percent else 100 end,
-		       completed_at = now(),
-		       failed_at = case when state.failed > 0 and state.completed = 0 then now() else failed_at end,
-		       eta_seconds = 0,
+		       phase = case
+				 when s.status in ('completed', 'partial', 'failed', 'cancelled') then s.phase
+				 when state.open > 0 then s.phase
+				 when state.failed > 0 and state.completed = 0 then 'failed'
+				 else 'done'
+			   end,
+		       progress_percent = case
+				 when state.open > 0 then s.progress_percent
+				 when state.failed > 0 and state.completed = 0 then s.progress_percent
+				 else 100
+			   end,
+		       completed_at = case
+				 when state.open > 0 or s.status in ('completed', 'partial', 'failed') then s.completed_at
+				 else now()
+			   end,
+		       failed_at = case
+				 when state.open = 0 and state.completed = 0 and state.failed > 0 and s.failed_at is null then now()
+				 else s.failed_at
+			   end,
+		       eta_seconds = case when state.open > 0 then s.eta_seconds else 0 end,
 		       error_message = case
-				 when state.completed = 0 and state.failed > 0 then 'Every engine pass failed — see the search log for the errors'
-				 else error_message
+				 when state.open = 0 and state.completed = 0 and state.failed > 0
+				   then 'Every engine pass failed — see the search log for the errors'
+				 else s.error_message
 			   end
 		  from state
 		 where s.id = $1
-		 returning s.status`, searchID).Scan(&status)
+		 returning s.status,
+		           (state.open = 0 and (select status from before) not in ('completed', 'partial', 'failed', 'cancelled'))`,
+		searchID).Scan(&status, &finished)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("search %s not found", searchID)
+		return "", false, fmt.Errorf("search %s not found", searchID)
 	}
-	return status, err
+	return status, finished, err
 }
 
 func (s *Store) SearchStatus(ctx context.Context, searchID string) (string, error) {
@@ -454,29 +515,29 @@ func (s *Store) LoadExport(ctx context.Context, exportID string) (*ExportJob, er
 }
 
 type ExportLead struct {
-	Slug          string
-	BusinessName  string
-	Category      *string
-	EmailPrimary  *string
-	Phone         *string
-	Website       *string
-	Address       *string
-	City          *string
-	State         *string
-	Country       *string
-	PostalCode    *string
-	Rating        *float64
-	ReviewCount   int
-	QualityScore  int
-	MapURL        *string
-	Latitude      *float64
-	Longitude     *float64
-	FirstSeenAt   time.Time
-	Emails        *string
-	Status        *string
-	PriceRange    *string
-	OpenHours     []byte
-	RawData       []byte
+	Slug         string
+	BusinessName string
+	Category     *string
+	EmailPrimary *string
+	Phone        *string
+	Website      *string
+	Address      *string
+	City         *string
+	State        *string
+	Country      *string
+	PostalCode   *string
+	Rating       *float64
+	ReviewCount  int
+	QualityScore int
+	MapURL       *string
+	Latitude     *float64
+	Longitude    *float64
+	FirstSeenAt  time.Time
+	Emails       *string
+	Status       *string
+	PriceRange   *string
+	OpenHours    []byte
+	RawData      []byte
 }
 
 // ExportLeads reads the rows for an export from canonical tables, honouring the

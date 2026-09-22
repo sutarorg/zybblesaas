@@ -14,8 +14,9 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string;
   /** Optional: overrides the API base when the SPA is served from another host. */
   readonly VITE_API_BASE_URL?: string;
-  /** Optional: public Razorpay key id, used only as a fallback for checkout. */
-  readonly VITE_RAZORPAY_KEY_ID?: string;
+  // Note: the Razorpay key id is *not* a VITE_ variable. Checkout is created
+  // server-side (api/billing/checkout.ts) and the key id arrives in that
+  // response, so the id is never baked into the bundle.
 }
 
 interface ImportMeta {
