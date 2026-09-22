@@ -28,6 +28,7 @@ import { BlogPage, ArticlePage } from "./pages/BlogPages";
 import { PrivacyPage, TermsPage, DpaPage, ResponsibleUsePage } from "./pages/LegalPages";
 import { Page as PageShell } from "./pages/ui";
 import { EngineProvider } from "./app/engine";
+import { SessionProvider, useSession } from "./app/session";
 import { AppShell } from "./app/shell";
 import { DashboardPage, FindLeadsPage } from "./app/pages1";
 import { LeadsPage, LeadDetailPage } from "./app/pages2";
@@ -189,10 +190,56 @@ export default function App() {
   );
 
   return (
-    <EngineProvider>
-      <ThemeProvider>{grained}</ThemeProvider>
-    </EngineProvider>
+    <SessionProvider>
+      <EngineProvider>
+        <ThemeProvider>{grained}</ThemeProvider>
+      </EngineProvider>
+    </SessionProvider>
   );
+}
+
+/** The workspace area requires a real session — there is no demo bypass. */
+function RequireSession({ children }: { children: React.ReactNode }) {
+  const { status } = useSession();
+
+  if (status === "loading") {
+    return (
+      <div className="grid min-h-screen place-items-center bg-ink">
+        <p className="font-mono text-[11.5px] text-faint">restoring your session…</p>
+      </div>
+    );
+  }
+  if (status === "unconfigured") {
+    return (
+      <div className="grid min-h-screen place-items-center bg-ink px-6">
+        <div className="max-w-lg rounded-2xl border border-amber/40 bg-amber/10 p-6 text-center">
+          <p className="font-display text-lg font-semibold text-bone">Authentication is not configured</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-amber">
+            Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY for the web app, plus SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY for the API, then reload.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (status !== "signed_in") {
+    return (
+      <div className="grid min-h-screen place-items-center bg-ink px-6">
+        <div className="max-w-md text-center">
+          <p className="font-display text-xl font-semibold text-bone">Sign in to continue</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-sage">Your workspace, searches and leads live behind your account.</p>
+          <div className="mt-5 flex justify-center gap-2.5">
+            <a href="#/signin" className="inline-flex h-11 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">
+              Sign in
+            </a>
+            <a href="#/signup" className="inline-flex h-11 items-center rounded-xl border border-line px-5 font-display text-sm font-medium text-bone">
+              Create workspace
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <>{children}</>;
 }
 
 function RouterContent({ path, seg, param, queryStr }: { path: string; seg: string; param: string; queryStr?: string }) {
@@ -216,25 +263,31 @@ function RouterContent({ path, seg, param, queryStr }: { path: string; seg: stri
   const AppPage = APP_SIMPLE[seg];
   if (AppPage && !param) {
     return (
-      <AppShell route={seg}>
-        <AppPage />
-      </AppShell>
+      <RequireSession>
+        <AppShell route={seg}>
+          <AppPage />
+        </AppShell>
+      </RequireSession>
     );
   }
   if ((seg === "setting" || seg === "settings") && !param) {
     const tab = new URLSearchParams(queryStr ?? "").get("tab") ?? undefined;
     return (
-      <AppShell route="setting">
-        <SettingsPage initialTab={tab} />
-      </AppShell>
+      <RequireSession>
+        <AppShell route="setting">
+          <SettingsPage initialTab={tab} />
+        </AppShell>
+      </RequireSession>
     );
   }
   const ParamPage = APP_PARAM[seg];
   if (ParamPage && param) {
     return (
-      <AppShell route={path}>
-        <ParamPage slug={param} />
-      </AppShell>
+      <RequireSession>
+        <AppShell route={path}>
+          <ParamPage slug={param} />
+        </AppShell>
+      </RequireSession>
     );
   }
 

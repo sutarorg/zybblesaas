@@ -97,7 +97,7 @@ export default function Demo() {
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <SectionHead
-          eyebrow="Live demo"
+          eyebrow="Guided preview"
           title={
             <>
               Don’t take our word for it.
@@ -105,7 +105,7 @@ export default function Demo() {
               <span className="text-zest">Pull a list right now.</span>
             </>
           }
-          copy="A miniature of the real engine, running in your browser. Type any niche and any city — then export the actual CSV. This is the toy version; yours runs 120 leads a minute."
+          copy="An in-browser simulation of the workspace, filled with synthetic sample records so you can try the flow without an account. Nothing here touches Google Maps — your real searches run on the Zybble worker and every number you see in the app comes from your own workspace."
         />
 
         <div className="mx-auto mt-12 max-w-4xl">
@@ -223,7 +223,7 @@ export default function Demo() {
                       </div>
                       <p className="text-sm font-medium text-bone">Your leads will stream in here</p>
                       <p className="mt-1.5 text-[12.5px] leading-relaxed text-sage">
-                        Hit “Find leads” — watch names, emails, phones and ratings appear in real time.
+                        Hit “Find leads” — this preview animates synthetic rows so you can see the shape of the result table.
                       </p>
                     </div>
                   </motion.div>
@@ -285,7 +285,7 @@ export default function Demo() {
             {/* footer */}
             <div className="flex flex-col gap-3 border-t border-line bg-ink/40 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <p className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-faint">
-                sample data for demo · the real thing goes deeper
+                simulated rows · nothing is scraped in your browser
               </p>
               <button
                 onClick={exportCsv}
@@ -298,7 +298,7 @@ export default function Demo() {
                 )}
               >
                 <Download className="size-4" />
-                Export real CSV (64 rows)
+                Download sample CSV (64 synthetic rows)
               </button>
             </div>
           </div>

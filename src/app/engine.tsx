@@ -1,161 +1,195 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { INITIAL_JOBS, slugify, type Job } from "./data";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { api, ApiError, type Job } from "../lib/api";
+import { supabase } from "../lib/supabase";
+import { useSession } from "./session";
+
+/**
+ * Live search state.
+ *
+ * The list is the real `/api/searches` payload. While anything is queued or
+ * running the app also listens to Supabase Realtime for row changes and polls
+ * as a fallback, so progress shown in the UI is the worker's own progress —
+ * never a client-side animation.
+ */
 
 type CreateJobInput = {
   query: string;
   city?: string;
   planned?: number;
   source?: "manual" | "ai";
-  flags?: Partial<Job["flags"]>;
-  firstLog?: string[];
+  flags?: Partial<{ email: boolean; fastMode: boolean; depth: number; radius: number; lang: string; grid: boolean; extraReviews: boolean }>;
+  aiPlan?: Record<string, unknown> | null;
+  name?: string;
 };
 
 type EngineCtx = {
   jobs: Job[];
-  createJob: (input: CreateJobInput) => Job;
-  toggle: (slug: string) => void;
-  rerun: (slug: string) => void;
+  loading: boolean;
+  error: string | null;
+  liveCount: number;
+  refresh: () => Promise<void>;
+  createJob: (input: CreateJobInput) => Promise<Job>;
+  toggle: (slug: string) => Promise<void>;
+  rerun: (slug: string) => Promise<void>;
+  cancel: (slug: string) => Promise<void>;
+  rename: (slug: string, name: string) => Promise<void>;
+  remove: (slug: string) => Promise<void>;
   get: (slug: string) => Job | undefined;
 };
 
 const Ctx = createContext<EngineCtx | null>(null);
 
-function nowStamp(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-}
-
-const LOG_POOL = (j: Job): string[] => {
-  const pct = Math.round((j.processed / Math.max(1, j.planned)) * 100);
-  return [
-    `sweeping sectors — ${pct}% of planned candidates processed`,
-    `sector cluster dense, split at zoom ${j.flags.fastMode ? 16 : 15}`,
-    `${j.found} candidates captured so far`,
-    j.flags.email ? `crawling official sites — email hit-rate ${Math.round((j.emails / Math.max(1, j.found)) * 100)}%` : "skipping email crawl (flag off)",
-    `dedupe pass — ${Math.floor(j.found * 0.014)} fingerprints merged`,
-    `throughput steady at ~${104 + Math.floor(Math.random() * 24)} places/min`,
-    `proxy rotation healthy — 0 blocks this run`,
-  ];
-};
+const ACTIVE = new Set(["queued", "running", "paused"]);
 
 export function EngineProvider({ children }: { children: ReactNode }) {
-  const [jobs, setJobs] = useState<Job[]>(INITIAL_JOBS);
-  const jobsRef = useRef(jobs);
-  jobsRef.current = jobs;
+  const { status, me } = useSession();
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const inflight = useRef(false);
+  const workspaceId = me?.workspace?.id ?? null;
+
+  const refresh = useCallback(async () => {
+    if (status !== "signed_in" || inflight.current) return;
+    inflight.current = true;
+    try {
+      const page = await api.searches.list({ limit: 100 });
+      setJobs(page.items);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not load your searches");
+    } finally {
+      inflight.current = false;
+      setLoading(false);
+    }
+  }, [status]);
 
   useEffect(() => {
-    const iv = setInterval(() => {
-      setJobs((prev) => {
-        let runningCount = prev.filter((j) => j.status === "running").length;
-        let promoted = false;
-        return prev.map((j) => {
-          // promote queued jobs while capacity allows
-          if (j.status === "queued" && runningCount < 2) {
-            runningCount++;
-            promoted = true;
-            return { ...j, status: "running" as const, log: [...j.log, `[${nowStamp()}] slot free — sweep started`] };
-          }
-          if (j.status !== "running") return j;
-          const step = 5 + Math.floor(Math.random() * 8);
-          const processed = Math.min(j.planned, j.processed + step);
-          const found = Math.min(processed - 3, j.found + step - 1 + Math.floor(Math.random() * 3));
-          const emails = j.flags.email
-            ? Math.min(found, j.emails + Math.round(step * (0.68 + Math.random() * 0.18)))
-            : j.emails;
-          const done = processed >= j.planned;
-          const extraLogs: string[] = [];
-          if (Math.random() > 0.55 && !done) {
-            const line = LOG_POOL(j)[Math.floor(Math.random() * 7)];
-            extraLogs.push(`[${nowStamp()}] ${line}`);
-          }
-          if (done) {
-            extraLogs.push(`[${nowStamp()}] dedupe final — ${Math.max(1, Math.round(found * 0.02))} duplicates merged`);
-            extraLogs.push(`[${nowStamp()}] ✔ complete — ${found} leads · ${j.flags.email ? `${emails} emails` : "email crawl skipped"} · list ready`);
-          }
-          return {
-            ...j,
-            status: done ? ("complete" as const) : j.status,
-            processed,
-            found,
-            emails,
-            etaMin: done ? 0 : Math.max(0, Math.ceil((j.planned - processed) / 70)),
-            listSlug: done && !j.listSlug ? slugify(j.query) : j.listSlug,
-            log: [...j.log, ...extraLogs].slice(-40),
-          };
-        });
-        void promoted;
-      });
-    }, 1400);
-    return () => clearInterval(iv);
-  }, []);
+    if (status !== "signed_in") {
+      setJobs([]);
+      setLoading(status === "loading");
+      return;
+    }
+    void refresh();
+  }, [refresh, status]);
 
-  const createJob = (input: CreateJobInput): Job => {
-    const planned = input.planned ?? 240 + Math.floor(Math.random() * 160);
-    const base = slugify(input.query) || "search";
-    let slug = base;
-    let n = 2;
-    while (jobsRef.current.some((j) => j.slug === slug)) slug = `${base}-${n++}`;
-    const job: Job = {
-      slug,
-      query: input.query,
-      city: input.city ?? input.query.replace(/^.*?\bin\s+/i, ""),
-      status: "queued",
-      planned,
-      processed: 0,
-      found: 0,
-      emails: 0,
-      createdLabel: "just now",
-      duration: "—",
-      etaMin: Math.ceil(planned / 110),
-      source: input.source ?? "manual",
-      flags: { email: true, fastMode: false, depth: 10, radius: 10, lang: "en", ...input.flags },
-      log: [
-        `[${nowStamp()}] ${input.source === "ai" ? "brief planned by AI — sector plan approved" : "run queued"} — ${Math.max(6, Math.round(planned / 28))} sectors × zoom 15`,
-        ...(input.firstLog ?? []),
-      ],
-    };
-    setJobs((p) => [job, ...p]);
-    return job;
-  };
-
-  const toggle = (slug: string) =>
-    setJobs((p) =>
-      p.map((j) => {
-        if (j.slug !== slug) return j;
-        if (j.status === "running")
-          return { ...j, status: "paused" as const, log: [...j.log, `[${nowStamp()}] ⏸ paused by user — resumable from current sector`].slice(-40) };
-        if (j.status === "paused")
-          return { ...j, status: "running" as const, log: [...j.log, `[${nowStamp()}] ▶ resumed — continuing from checkpoint`].slice(-40) };
-        return j;
+  // Realtime: the worker updates search rows, so a row change is progress.
+  useEffect(() => {
+    const client = supabase;
+    if (!client || !workspaceId || status !== "signed_in") return;
+    const channel = client
+      .channel(`searches:${workspaceId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "searches", filter: `workspace_id=eq.${workspaceId}` }, () => {
+        void refresh();
       })
-    );
+      .subscribe();
 
-  const rerun = (slug: string) =>
-    setJobs((p) =>
-      p.map((j) =>
-        j.slug === slug && (j.status === "failed" || j.status === "complete" || j.status === "paused")
-          ? {
-              ...j,
-              status: "queued" as const,
-              processed: 0,
-              found: 0,
-              emails: 0,
-              etaMin: Math.ceil(j.planned / 110),
-              flags: { ...j.flags, fastMode: false },
-              log: [...j.log, `[${nowStamp()}] re-run queued — standard mode, fresh credentials`].slice(-40),
-            }
-          : j
-      )
-    );
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [refresh, status, workspaceId]);
 
-  const get = (slug: string) => jobs.find((j) => j.slug === slug);
+  // Polling fallback (and the only source of truth when Realtime is off).
+  useEffect(() => {
+    if (status !== "signed_in") return;
+    const hasActive = jobs.some((job) => ACTIVE.has(job.status));
+    const interval = window.setInterval(() => void refresh(), hasActive ? 5_000 : 30_000);
+    return () => window.clearInterval(interval);
+  }, [jobs, refresh, status]);
 
-  return <Ctx.Provider value={{ jobs, createJob, toggle, rerun, get }}>{children}</Ctx.Provider>;
+  const createJob = useCallback(
+    async (input: CreateJobInput): Promise<Job> => {
+      const flags = input.flags ?? {};
+      const response = await api.searches.create({
+        query: input.query.trim(),
+        name: input.name,
+        location: input.city?.trim() || undefined,
+        requestedCount: input.planned,
+        source: input.source ?? "manual",
+        aiPlan: input.aiPlan ?? null,
+        config: {
+          emailExtraction: flags.email ?? true,
+          fastMode: flags.fastMode ?? false,
+          depth: flags.depth,
+          radiusKm: flags.radius,
+          language: flags.lang,
+          grid: flags.grid,
+          extraReviews: flags.extraReviews,
+        },
+      });
+      await refresh();
+      return response.search;
+    },
+    [refresh],
+  );
+
+  const toggle = useCallback(
+    async (slug: string) => {
+      const job = jobs.find((candidate) => candidate.slug === slug);
+      if (!job) return;
+      await api.searches.action(slug, job.status === "running" || job.status === "queued" ? "pause" : "resume");
+      await refresh();
+    },
+    [jobs, refresh],
+  );
+
+  const rerun = useCallback(
+    async (slug: string) => {
+      await api.searches.action(slug, "rerun");
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const cancel = useCallback(
+    async (slug: string) => {
+      await api.searches.action(slug, "cancel");
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const rename = useCallback(
+    async (slug: string, name: string) => {
+      await api.searches.rename(slug, name);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const remove = useCallback(
+    async (slug: string) => {
+      await api.searches.remove(slug);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const get = useCallback((slug: string) => jobs.find((job) => job.slug === slug), [jobs]);
+
+  const value = useMemo<EngineCtx>(
+    () => ({
+      jobs,
+      loading,
+      error,
+      liveCount: jobs.filter((job) => ACTIVE.has(job.status)).length,
+      refresh,
+      createJob,
+      toggle,
+      rerun,
+      cancel,
+      rename,
+      remove,
+      get,
+    }),
+    [cancel, createJob, error, get, jobs, loading, refresh, remove, rename, rerun, toggle],
+  );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useEngine(): EngineCtx {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useEngine outside provider");
-  return ctx;
+  const context = useContext(Ctx);
+  if (!context) throw new Error("useEngine must be used inside <EngineProvider>");
+  return context;
 }
