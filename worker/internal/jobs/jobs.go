@@ -90,6 +90,13 @@ func (p *liveProgress) update(seedCompleted, placesFound, placesCompleted int, d
 	p.delivered = delivered
 }
 
+// counts returns the engine-wide totals the exiter reported so far.
+func (p *liveProgress) counts() (seedCompleted, placesFound, placesCompleted int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seedCompleted, p.placesFound, p.placesCompleted
+}
+
 func (p *liveProgress) snapshotDelivered() map[string]int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -348,10 +355,14 @@ func (w *Worker) progressLoop(ctx context.Context, searchID, jobID string, progr
 			if err := w.Store.RefreshProgress(ctx, searchID, int(w.Config.ProgressThrottle.Seconds()), false); err != nil {
 				w.Log.Warn("progress refresh failed", "error", err)
 			}
-			_ = seedCompleted
-			_ = placesFound
-			_ = placesCompleted
-		}
+
+			seedCompleted, placesFound, placesCompleted := progress.counts()
+			w.Log.Debug("scrape progress",
+				"search", searchID,
+				"seeds_completed", seedCompleted,
+				"places_found", placesFound,
+				"places_completed", placesCompleted,
+				"inputs_reporting", len(delivered))
 	}
 }
 
