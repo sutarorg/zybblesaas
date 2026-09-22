@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  frontend-and-api:
+    name: Frontend build, API typecheck, database tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Typecheck the frontend
+        run: npx tsc -p tsconfig.json --noEmit
+      - name: Typecheck the API layer
+        run: npx tsc -p tsconfig.api.json --noEmit
+      - name: Tests (migrations, RLS, queue, API/schema contract)
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  worker:
+    name: Worker build and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache-dependency-path: worker/go.sum
+      - name: Resolve modules
+        working-directory: worker
+        run: go mod tidy
+      - name: Vet
+        working-directory: worker
+        run: go vet ./...
+      - name: Build
+        working-directory: worker
+        run: go build ./...

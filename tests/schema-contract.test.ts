@@ -251,6 +251,10 @@ describe("schema contract", () => {
     const problems: string[] = [];
     for (const file of files.filter((candidate) => candidate.path.endsWith(".go"))) {
       for (const match of file.text.matchAll(/\b(public|ops)\.([a-z_]+)\s*\(/g)) {
+        const start = match.index ?? 0;
+        const before = file.text.slice(Math.max(0, start - 40), start);
+        // Raw SQL statements name tables, not RPCs — only calls are checked here.
+        if (/(insert\s+into|update|delete\s+from|from|join|table|references)\s*$/i.test(before)) continue;
         const key = `${match[1]}.${match[2]}`;
         if (!schema.functions.has(key)) problems.push(`${file.path}: unknown function ${key}()`);
       }

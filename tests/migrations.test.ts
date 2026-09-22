@@ -24,6 +24,7 @@ describe("migrations (empty database -> production schema)", () => {
       "0008_rls.sql",
       "0009_storage_and_realtime.sql",
       "0010_seed.sql",
+      "0011_notification_email_queue.sql",
     ]);
   });
 

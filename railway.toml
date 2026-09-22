@@ -1,0 +1,19 @@
+# Railway configuration for the Zybble worker.
+#
+# The frontend and API live on Vercel; this service only runs background work
+# (Google Maps scraping, exports, AI jobs).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "worker/Dockerfile"
+watchPatterns = ["worker/**"]
+
+[deploy]
+# One replica keeps browser memory predictable; raise numReplicas and the queue
+# is still safe because claiming uses FOR UPDATE SKIP LOCKED.
+numReplicas = 1
+startCommand = "/usr/local/bin/zybble-worker"
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
