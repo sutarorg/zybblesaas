@@ -13,6 +13,9 @@ ARG GOSOM_VERSION=v1.18.1
 FROM golang:${GO_VERSION}-trixie AS playwright-deps
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
 ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
+# An ARG declared before the first FROM is only usable in FROM lines; using it
+# inside a stage requires re-declaring it here (it inherits the default above).
+ARG PLAYWRIGHT_GO_VERSION
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
