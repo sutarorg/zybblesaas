@@ -363,6 +363,7 @@ func (w *Worker) progressLoop(ctx context.Context, searchID, jobID string, progr
 				"places_found", placesFound,
 				"places_completed", placesCompleted,
 				"inputs_reporting", len(delivered))
+		}
 	}
 }
 
