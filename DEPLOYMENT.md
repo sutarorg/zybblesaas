@@ -334,10 +334,11 @@ green order here is the only evidence that counts.
 
 ### Known gaps **(verify on first deploy)**
 
-- The worker was written without a Go toolchain available in the environment
-  where this repository was assembled, so the first CI/Railway build is its
-  first real compile. CI runs `go mod tidy`, `go vet` and `go build` on every
-  push; expect that first run to add `go.sum` entries.
+- The worker compiles and vets clean in CI, but has never been *run*: there has
+  been no live database, no Chromium session and no Gemini call. Expect the
+  first Railway deploy to surface runtime issues (page selectors, browser flags,
+  memory) rather than compile issues. CI generates `go.sum` on the runner but
+  does not commit it; commit a generated `go.sum` for reproducible builds.
 - Razorpay USD recurring requires account activation; the code surfaces the
   provider's error rather than masking it, so the first real checkout is the
   proof.

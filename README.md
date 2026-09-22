@@ -85,6 +85,12 @@ that anonymous calls are refused, that malformed bodies produce the error
 envelope, that provider-less deployments return `503 not_configured` instead of
 fake data, and that no response leaks a secret-shaped value.
 
+CI (`.github/workflows/ci.yml`) runs the SPA typecheck, the API typecheck, the
+test suite, the smoke drill and the production build, then builds and vets the
+Go worker (`go mod tidy`, `go vet ./...`, `go build ./...`). Both jobs are green
+on the current branch; the worker job is the only thing that has ever compiled
+`worker/`, so treat a red worker job as a hard stop.
+
 `tests/db/harness.ts` boots a real PostgreSQL 16 engine in-process (PGlite) and
 applies the migrations, so the schema, the policies and the queue functions are
 executed for real rather than described. Those tests are the reason the
