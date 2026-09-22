@@ -76,7 +76,14 @@ npm test                       # vitest: migrations, RLS, queue semantics, API/s
 npm run typecheck              # strict TypeScript for the SPA
 npx tsc -p tsconfig.api.json --noEmit   # strict TypeScript for the API
 npm run build                  # production bundle
+npm run smoke:api              # drill every API route with no env configured
 ```
+
+`npm run smoke:api` imports all 28 route modules and calls them through the real
+`route()` wrapper: it checks that unsupported methods return `405` + `Allow`,
+that anonymous calls are refused, that malformed bodies produce the error
+envelope, that provider-less deployments return `503 not_configured` instead of
+fake data, and that no response leaks a secret-shaped value.
 
 `tests/db/harness.ts` boots a real PostgreSQL 16 engine in-process (PGlite) and
 applies the migrations, so the schema, the policies and the queue functions are

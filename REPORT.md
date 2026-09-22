@@ -212,7 +212,32 @@ data left is the landing-page preview, which is labelled *Guided preview* /
 *simulated extraction feed* and touches no account. When a provider is
 unconfigured, the API returns `503 not_configured` and the UI says so.
 
-## 19. What is *not* verified yet (do these before launch)
+## 19. Runtime evidence collected here
+
+`npm run smoke:api` (`scripts/api-smoke.ts`) drives **all 28 route modules**
+through the real `route()` wrapper with no environment configured — 112
+requests — and asserts the properties that must hold before any provider
+exists. Result on this machine:
+
+| Observation | Count |
+| --- | --- |
+| `405` with an `Allow` header (unsupported method on every route) | 57 |
+| `401` (anonymous call to a route that requires a session or key) | 50 |
+| `503 not_configured` (provider/database absent, reported honestly) | 3 |
+| `400 bad_request` (malformed webhook body → error envelope) | 1 |
+| `200` — `/api/system` only, reporting `ai:false, billing:false, billingProvider:null` | 1 |
+
+No response contained a secret-shaped value, no anonymous request received
+fabricated data, and `/api/health` returned `503` with `database.ok:false` and a
+message naming the missing migrations — the honest failure this whole design is
+built around.
+
+The other executed evidence: `npm test` (54 tests against a real PostgreSQL 16
+engine — migrations, RLS/security, queue semantics, API/schema contract),
+`npx tsc -p tsconfig.json --noEmit`, `npx tsc -p tsconfig.api.json --noEmit`
+(which now also covers the smoke script) and `npm run build`.
+
+## 20. What is *not* verified yet (do these before launch)
 
 1. **The worker has never been compiled.** No Go toolchain existed in the
    environment where it was written, and the Go hosts were unreachable. Its
@@ -227,10 +252,13 @@ unconfigured, the API returns `503 not_configured` and the UI says so.
    layer is wired to the real API, but nobody has clicked through every screen
    against a live backend yet. `DEPLOYMENT.md` §6 is the checklist that closes
    this gap — 12 ordered steps, each naming the artefact that proves it worked.
-4. **Runtime shapes that TypeScript cannot prove.** Two known ones to watch on
+4. **Nothing has run against a live database or provider.** The API smoke test
+   above exercises the real handlers, but with no `SUPABASE_*` values set: every
+   database path is still unexecuted outside the PGlite test harness.
+5. **Runtime shapes that TypeScript cannot prove.** Two known ones to watch on
    the first run: `/api/billing/subscription` must serialise
    `current_period_end` (the DB column is `subscriptions.current_end`), and the
    `/lists` → `jobSlug` mapping must return the embedded search slug.
 
-Until those four are done, this is a complete implementation, not a proven
+Until those five are done, this is a complete implementation, not a proven
 deployment.

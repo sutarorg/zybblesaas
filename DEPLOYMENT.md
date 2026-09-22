@@ -257,6 +257,12 @@ Nothing is simulated.
 Run this list against production, with a real account and (for the last two
 steps) real payment credentials. Each step names what proves it worked.
 
+0. **API surface before anything else** → `npm run smoke:api` (locally, or
+   against the preview URL by pointing the script's `process.cwd()` imports at
+   it) must print "every route answered, methods are enforced, anonymous calls
+   are refused". With the production environment loaded, the `503` rows above
+   should turn into real status codes; anything still `503` names the variable
+   that is missing.
 1. **Sign-up** → the app shows the real state: signed in, or *check your inbox*
    when confirmation is enabled. No session is invented. *(Authentication →
    Users shows the account.)*

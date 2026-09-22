@@ -22,6 +22,11 @@ jobs:
         run: npx tsc -p tsconfig.api.json --noEmit
       - name: Tests (migrations, RLS, queue, API/schema contract)
         run: npm test
+      # Deliberately runs with no SUPABASE_*/GEMINI_*/RAZORPAY_* values: the
+      # script asserts that every route answers honestly (405/401/503/400)
+      # instead of fabricating data when no provider is configured.
+      - name: API route smoke (no environment configured)
+        run: npm run smoke:api
       - name: Production build
         run: npm run build
 
