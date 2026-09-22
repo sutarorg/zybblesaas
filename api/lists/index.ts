@@ -23,17 +23,20 @@ export default route(
   { methods: ["GET", "POST"], auth: "both", scopes: ["lists:read", "lists:write"], limit: { bucket: "lists", perMinute: 120 } },
   async (ctx) => {
     if (ctx.req.method?.toUpperCase() === "GET") {
-      const rows = await query<ListRow[]>(
+      const rows = await query<Array<ListRow & { source_search: { slug: string } | null }>>(
         admin()
           .from("lists")
-          .select("*")
+          .select("*, source_search:searches(slug)")
           .eq("workspace_id", ctx.workspaceId)
           .is("deleted_at", null)
           .order("updated_at", { ascending: false })
           .limit(200),
         "list query",
       );
-      return ok({ items: rows.map(toList), total: rows.length });
+      return ok({
+        items: rows.map((row) => toList({ ...row, source_search_slug: row.source_search?.slug ?? null })),
+        total: rows.length,
+      });
     }
 
     const body = parse(createSchema, ctx.body);
@@ -73,7 +76,16 @@ export default route(
       if (error) throw conflict(error.message);
     }
 
+    let sourceSearchSlug: string | null = null;
+    if (list.source_search_id) {
+      const sources = await query<Array<{ slug: string }>>(
+        admin().from("searches").select("slug").eq("id", list.source_search_id).limit(1),
+        "list source search",
+      );
+      sourceSearchSlug = sources[0]?.slug ?? null;
+    }
+
     await audit(ctx, { action: "list.created", targetType: "list", targetId: list.id, metadata: { name: body.name, seeded: body.leadIds?.length ?? 0 } });
-    return created({ list: toList(list) });
+    return created({ list: toList({ ...list, source_search_slug: sourceSearchSlug }) });
   },
 );

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -8,8 +8,8 @@ import {
   Download,
   FolderKanban,
   Hourglass,
-  Play,
   Pause,
+  Play,
   Plus,
   Radar,
   RefreshCw,
@@ -18,15 +18,10 @@ import {
   Trash2,
   User,
 } from "lucide-react";
+import { api, ApiError, type LeadListItem } from "../lib/api";
 import { useEngine } from "./engine";
-import {
-  INITIAL_LISTS,
-  download,
-  leadCsv,
-  poolFull,
-  slugify,
-  type ListMeta,
-} from "./data";
+import { useList, useLists } from "./hooks";
+import { initials, relTime } from "./data";
 import { Card, EmptyState, Meter, Modal, PageHeader, QualityBar, StatusChip } from "./shell";
 import { cn } from "../utils/cn";
 
@@ -35,90 +30,108 @@ import { cn } from "../utils/cn";
 /* ================================================================== */
 
 export function ListsPage() {
-  const [extra, setExtra] = useState<ListMeta[]>([]);
+  const { data, error, loading, reload } = useLists({ limit: 100 });
   const [modal, setModal] = useState(false);
   const [name, setName] = useState("");
-  const lists = [...extra, ...INITIAL_LISTS];
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const create = () => {
+  const lists = data?.items ?? [];
+
+  const create = async () => {
     if (!name.trim()) return;
-    setExtra((e) => [
-      {
-        slug: slugify(name),
-        name: slugify(name),
-        seed: "dentists in Berlin",
-        count: 0,
-        withEmail: 0,
-        avgRating: 0,
-        completeness: 0,
-        updatedAgo: "just now",
-        tag: "draft",
-        description: "Empty list — add leads from any search or use Add to list on any record.",
-      },
-      ...e,
-    ]);
-    setName("");
-    setModal(false);
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api.lists.create({ name: name.trim() });
+      setName("");
+      setModal(false);
+      await reload();
+    } catch (cause) {
+      setProblem(cause instanceof ApiError ? cause.message : "The list could not be created");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div>
       <PageHeader
         title={<>Lists</>}
-        desc={`${lists.length} lists · deduped automatically across all of them.`}
+        desc={`${lists.length} list${lists.length === 1 ? "" : "s"} · deduped automatically across all of them.`}
         actions={
-          <button onClick={() => setModal(true)} className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95">
+          <button
+            onClick={() => setModal(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95"
+          >
             <Plus className="size-4" /> New list
           </button>
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {lists.map((l, i) => (
-          <motion.a
-            key={l.slug}
-            href={`#/list/${l.slug}`}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: Math.min(i * 0.05, 0.3), duration: 0.5 }}
-            className="group flex flex-col rounded-2xl border border-line bg-coal p-5 transition-all duration-300 hover:-translate-y-1 hover:border-zest/30"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className={cn(
-                "rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest",
-                l.tag === "ai-built" ? "border-zest/40 bg-zest/10 text-zest" : l.tag === "archive" ? "border-line text-faint" : l.tag === "draft" ? "border-amber/40 bg-amber/10 text-amber" : "border-line text-sage"
-              )}>
-                {l.tag}
-              </span>
-              <span className="font-mono text-[10px] text-faint">{l.updatedAgo}</span>
-            </div>
-            <h3 className="mt-3.5 font-display text-lg font-semibold tracking-tight text-bone transition-colors group-hover:text-zest">
-              {l.name}
-            </h3>
-            <p className="mt-1 line-clamp-2 flex-1 text-[12px] leading-relaxed text-sage">{l.description}</p>
-            <div className="mt-5 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line">
-              {[
-                [l.count.toLocaleString(), "leads"],
-                [l.count ? `${Math.round((l.withEmail / Math.max(1, l.count)) * 100)}%` : "—", "emails"],
-                [l.count ? l.avgRating.toFixed(1) + "★" : "—", "avg rating"],
-              ].map(([v, k]) => (
-                <div key={k} className="bg-ink/50 px-2 py-2.5 text-center">
-                  <p className="font-display text-[15px] font-bold text-bone">{v}</p>
-                  <p className="font-mono text-[8px] uppercase tracking-wider text-faint">{k}</p>
-                </div>
-              ))}
-            </div>
-            {l.count > 0 && (
-              <div className="mt-3.5 flex items-center justify-between">
-                <QualityBar value={l.completeness} />
-                <span className="inline-flex items-center gap-1 font-mono text-[10.5px] text-zest opacity-0 transition-opacity group-hover:opacity-100">
-                  open <ArrowRight className="size-3" />
+      {error && <Card className="mb-4 border-amber/40 p-4 text-[13px] text-amber">{error}</Card>}
+
+      {loading ? (
+        <Card className="p-10 text-center font-mono text-[11.5px] text-faint">loading lists…</Card>
+      ) : lists.length === 0 ? (
+        <EmptyState
+          icon={FolderKanban}
+          title="No lists yet"
+          desc="Create a list, or save the results of a search — every list shares the same dedupe."
+          action={
+            <a href="#/findleads" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">
+              Run a search
+            </a>
+          }
+        />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {lists.map((list, index) => (
+            <motion.a
+              key={list.id}
+              href={`#/list/${list.slug}`}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: Math.min(index * 0.05, 0.3), duration: 0.5 }}
+              className="group flex flex-col rounded-2xl border border-line bg-coal p-5 transition-all duration-300 hover:-translate-y-1 hover:border-zest/30"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest",
+                    list.tag === "ai" ? "border-zest/40 bg-zest/10 text-zest" : list.tag === "selection" ? "border-zest/40 bg-zest/10 text-zest" : "border-line text-sage",
+                  )}
+                >
+                  {list.tag}
                 </span>
+                <span className="font-mono text-[10px] text-faint">{relTime(list.updatedAgo)}</span>
               </div>
-            )}
-          </motion.a>
-        ))}
-      </div>
+              <h3 className="mt-3.5 font-display text-lg font-semibold tracking-tight text-bone transition-colors group-hover:text-zest">{list.name}</h3>
+              <p className="mt-1 line-clamp-2 flex-1 text-[12px] leading-relaxed text-sage">{list.description || "No description yet."}</p>
+              <div className="mt-5 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line">
+                {[
+                  [list.count.toLocaleString(), "leads"],
+                  [list.count ? `${Math.round((list.withEmail / Math.max(1, list.count)) * 100)}%` : "—", "emails"],
+                  [list.count ? `${list.avgRating.toFixed(1)}★` : "—", "avg rating"],
+                ].map(([value, key]) => (
+                  <div key={key} className="bg-ink/50 px-2 py-2.5 text-center">
+                    <p className="font-display text-[15px] font-bold text-bone">{value}</p>
+                    <p className="font-mono text-[8px] uppercase tracking-wider text-faint">{key}</p>
+                  </div>
+                ))}
+              </div>
+              {list.count > 0 && (
+                <div className="mt-3.5 flex items-center justify-between">
+                  <QualityBar value={list.completeness} />
+                  <span className="inline-flex items-center gap-1 font-mono text-[10.5px] text-zest opacity-0 transition-opacity group-hover:opacity-100">
+                    open <ArrowRight className="size-3" />
+                  </span>
+                </div>
+              )}
+            </motion.a>
+          ))}
+        </div>
+      )}
 
       <Modal open={modal} onClose={() => setModal(false)} title="Create list">
         <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.16em] text-faint">List name</label>
@@ -126,12 +139,17 @@ export function ListsPage() {
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && create()}
+          onKeyDown={(e) => e.key === "Enter" && void create()}
           placeholder="denver-roofers-q2"
           className="h-11 w-full rounded-xl border border-line bg-ink/60 px-4 text-sm text-bone placeholder:text-faint outline-none focus:border-zest/50"
         />
-        <button onClick={create} className="mt-5 h-11 w-full rounded-xl bg-zest font-display text-sm font-semibold text-ink transition-transform hover:scale-[1.02] active:scale-95">
-          Create list
+        {problem && <p className="mt-3 font-mono text-[11.5px] text-amber">{problem}</p>}
+        <button
+          onClick={() => void create()}
+          disabled={busy || !name.trim()}
+          className="mt-5 h-11 w-full rounded-xl bg-zest font-display text-sm font-semibold text-ink transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-40"
+        >
+          {busy ? "Creating…" : "Create list"}
         </button>
       </Modal>
     </div>
@@ -143,45 +161,72 @@ export function ListsPage() {
 /* ================================================================== */
 
 export function ListDetailPage({ slug }: { slug: string }) {
-  const { jobs } = useEngine();
-  const [shown, setShown] = useState(10);
+  const [offset, setOffset] = useState(0);
+  const pageSize = 25;
+  const [queryInput, setQueryInput] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [onlyEmail, setOnlyEmail] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const meta: ListMeta | null = useMemo(() => {
-    const found = INITIAL_LISTS.find((l) => l.slug === slug);
-    if (found) return found;
-    const job = jobs.find((j) => j.listSlug === slug);
-    if (job)
-      return {
-        slug,
-        name: slug,
-        seed: job.query,
-        count: job.found,
-        withEmail: job.emails,
-        avgRating: 4.5,
-        completeness: 90,
-        updatedAgo: "just now",
-        jobSlug: job.slug,
-        tag: job.source === "ai" ? "ai-built" : "outbound",
-        description: `Auto-saved when “${job.query}” completed.`,
-      };
-    return null;
-  }, [slug, jobs]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(queryInput.trim()), 350);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
 
-  const leads = useMemo(() => (meta ? poolFull(meta.seed).slice(0, Math.min(meta.count, 28)) : []), [meta]);
+  const { data, error, loading } = useList(slug, {
+    q: debounced || undefined,
+    has_email: onlyEmail || undefined,
+    limit: pageSize,
+    offset,
+  });
 
-  if (!meta) {
+  const list = data?.list ?? null;
+  const leads = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const loadingLeads = loading || !list;
+
+  const exportList = async () => {
+    if (!list) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api.exports.create({ name: list.name, format: "csv", sourceType: "list", sourceId: list.id });
+      window.location.hash = "#/exports";
+    } catch (cause) {
+      setProblem(cause instanceof ApiError ? cause.message : "The export could not be queued");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeList = async () => {
+    if (!list) return;
+    setBusy(true);
+    try {
+      await api.lists.remove(list.slug);
+      window.location.hash = "#/lists";
+    } catch (cause) {
+      setProblem(cause instanceof ApiError ? cause.message : "The list could not be deleted");
+      setBusy(false);
+    }
+  };
+
+  if (!loadingLeads && (error || !list)) {
     return (
       <EmptyState
         icon={FolderKanban}
         title="List not found"
-        desc="It may have been deleted or never saved."
-        action={<a href="#/lists" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">All lists</a>}
+        desc={error ?? "It may have been deleted or never saved."}
+        action={
+          <a href="#/lists" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">
+            All lists
+          </a>
+        }
       />
     );
   }
-
-  const seedSlug = meta.seed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
   return (
     <div>
@@ -189,98 +234,160 @@ export function ListDetailPage({ slug }: { slug: string }) {
         <ArrowLeft className="size-3.5" /> all lists
       </a>
 
+      {problem && <Card className="mb-4 border-amber/40 p-4 text-[13px] text-amber">{problem}</Card>}
+
       {/* header */}
       <Card className="p-5 sm:p-7">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="font-display text-xl font-bold tracking-tight text-bone sm:text-2xl">{meta.name}</h1>
-              <span className="rounded-full border border-zest/30 bg-zest/[0.07] px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-wider text-zest">{meta.tag}</span>
+              <h1 className="font-display text-xl font-bold tracking-tight text-bone sm:text-2xl">{list?.name ?? "…"}</h1>
+              {list && (
+                <span className="rounded-full border border-zest/30 bg-zest/[0.07] px-2.5 py-1 font-mono text-[9.5px] uppercase tracking-wider text-zest">{list.tag}</span>
+              )}
             </div>
-            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-sage">{meta.description}</p>
-            {meta.jobSlug && (
-              <a href={`#/search/${meta.jobSlug}`} className="mt-2.5 inline-flex items-center gap-1.5 font-mono text-[11px] text-zest hover:underline">
+            <p className="mt-2 max-w-xl text-[13px] leading-relaxed text-sage">{list?.description || "No description yet."}</p>
+            {list?.jobSlug && (
+              <a href={`#/search/${list.jobSlug}`} className="mt-2.5 inline-flex items-center gap-1.5 font-mono text-[11px] text-zest hover:underline">
                 <Radar className="size-3" /> source search →
               </a>
             )}
           </div>
           <div className="flex gap-2.5">
             <button
-              onClick={() => download(`${meta.name}.csv`, leadCsv(leads))}
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95"
+              onClick={() => void exportList()}
+              disabled={busy || !list}
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95 disabled:opacity-40"
             >
               <Download className="size-4" /> Export CSV
             </button>
-            <button onClick={() => setConfirmDelete(true)} className="grid size-10 place-items-center rounded-xl border border-line text-faint transition-colors hover:border-red-400/40 hover:text-red-300">
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="grid size-10 place-items-center rounded-xl border border-line text-faint transition-colors hover:border-red-400/40 hover:text-red-300"
+            >
               <Trash2 className="size-4" />
             </button>
           </div>
         </div>
         <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line lg:grid-cols-4">
           {[
-            [meta.count.toLocaleString(), "leads"],
-            [`${meta.count ? Math.round((meta.withEmail / Math.max(1, meta.count)) * 100) : 0}%`, "with email"],
-            [meta.count ? meta.avgRating.toFixed(1) + "★" : "—", "avg rating"],
-            [meta.count ? meta.completeness + "%" : "—", "completeness"],
-          ].map(([v, k]) => (
-            <div key={k} className="bg-coal px-4 py-4 text-center">
-              <p className="font-display text-xl font-bold text-bone">{v}</p>
-              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-widest text-faint">{k}</p>
+            [(list?.count ?? 0).toLocaleString(), "leads"],
+            [`${list && list.count ? Math.round((list.withEmail / Math.max(1, list.count)) * 100) : 0}%`, "with email"],
+            [list && list.count ? `${list.avgRating.toFixed(1)}★` : "—", "avg rating"],
+            [list && list.count ? `${list.completeness}%` : "—", "completeness"],
+          ].map(([value, key]) => (
+            <div key={key} className="bg-coal px-4 py-4 text-center">
+              <p className="font-display text-xl font-bold text-bone">{value}</p>
+              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-widest text-faint">{key}</p>
             </div>
           ))}
         </div>
       </Card>
 
-      {/* dedupe card */}
+      {/* dedupe note — real status only */}
       <Card className="mt-4 flex flex-col items-start gap-4 p-5 sm:flex-row sm:items-center">
         <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-zest/25 bg-zest/[0.07]">
           <CopyX className="size-5 text-zest" />
         </span>
         <div className="flex-1">
-          <h3 className="font-display text-[15px] font-semibold text-bone">Dedupe report</h3>
+          <h3 className="font-display text-[15px] font-semibold text-bone">Dedupe</h3>
           <p className="mt-1 text-[12.5px] leading-relaxed text-sage">
-            Fingerprinted against {meta.count ? Math.round(meta.count * 1.14).toLocaleString() : "0"} records —{" "}
-            <span className="text-bone">{Math.round(meta.count * 0.06)} duplicates merged</span>, zero quota burned twice.
+            Membership is unique per (list, lead) and the engine dedupes against your whole workspace, so a business that is already in{" "}
+            <span className="text-bone">any</span> of your lists or searches is never billed again.
+            {list?.jobSlug ? " The source search's own duplicate count is on its detail page." : ""}
           </p>
         </div>
-        <span className="rounded-md bg-zest/10 px-2.5 py-1.5 font-mono text-[10.5px] font-semibold text-zest">clean ✓</span>
+        <span className="rounded-md bg-zest/10 px-2.5 py-1.5 font-mono text-[10.5px] font-semibold text-zest">active</span>
       </Card>
 
       {/* leads */}
       <Card className="mt-4 overflow-hidden">
-        <div className="flex items-center justify-between border-b border-line px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
           <h3 className="font-display text-base font-semibold text-bone">Records</h3>
-          <span className="font-mono text-[10.5px] text-faint">top {Math.min(shown, leads.length)} of {meta.count}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={queryInput}
+              onChange={(e) => {
+                setQueryInput(e.target.value);
+                setOffset(0);
+              }}
+              placeholder="filter this list…"
+              className="h-9 rounded-lg border border-line bg-ink/60 px-3 font-mono text-[11.5px] text-bone placeholder:text-faint outline-none focus:border-zest/50"
+            />
+            <button
+              onClick={() => {
+                setOnlyEmail((value) => !value);
+                setOffset(0);
+              }}
+              className={cn(
+                "h-9 rounded-lg border px-3 font-mono text-[11px] transition-colors",
+                onlyEmail ? "border-zest/50 bg-zest/10 text-zest" : "border-line text-sage hover:text-bone",
+              )}
+            >
+              has email
+            </button>
+            <span className="font-mono text-[10.5px] text-faint">
+              {leads.length} of {total}
+            </span>
+          </div>
         </div>
         <div className="divide-y divide-line/60">
-          {leads.slice(0, shown).map((l) => (
-            <a key={`${l.seed}|${l.idx}`} href={`#/lead/${seedSlug}__${l.idx}`} className="flex items-center gap-3.5 px-5 py-3.5 transition-colors hover:bg-white/[0.02]">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-line bg-white/[0.03] font-display text-[11px] font-bold text-zest">
-                {l.name.split(" ").slice(0, 2).map((w) => w[0]).join("")}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13.5px] font-medium text-bone">{l.name}</p>
-                <p className="truncate font-mono text-[10.5px] text-zest/80">{l.email || l.phone}</p>
-              </div>
-              <QualityBar value={l.completeness} />
-              <span className="hidden font-mono text-[11px] text-amber sm:inline">★ {l.rating.toFixed(1)}</span>
-            </a>
-          ))}
+          {leads.length === 0 ? (
+            <p className="px-5 py-10 text-center font-mono text-[11.5px] text-faint">
+              {loadingLeads ? "loading records…" : total === 0 ? "This list is empty — add leads from any search or record." : "No lead in this list matches the filter."}
+            </p>
+          ) : (
+            leads.map((lead: LeadListItem) => (
+              <a key={lead.id} href={`#/lead/${lead.slug}`} className="flex items-center gap-3.5 px-5 py-3.5 transition-colors hover:bg-white/[0.02]">
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-line bg-white/[0.03] font-display text-[11px] font-bold text-zest">
+                  {initials(lead.name)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[13.5px] font-medium text-bone">{lead.name}</p>
+                  <p className="truncate font-mono text-[10.5px] text-zest/80">{lead.email || lead.phone || "no contact captured"}</p>
+                </div>
+                <QualityBar value={lead.qualityScore} />
+                {lead.rating > 0 && <span className="hidden font-mono text-[11px] text-amber sm:inline">★ {lead.rating.toFixed(1)}</span>}
+              </a>
+            ))
+          )}
         </div>
-        {shown < leads.length && (
-          <button onClick={() => setShown((s) => s + 10)} className="h-11 w-full border-t border-line font-mono text-[11.5px] text-sage transition-colors hover:text-bone">
-            show more
-          </button>
+        {(offset > 0 || offset + leads.length < total) && (
+          <div className="flex border-t border-line">
+            <button
+              onClick={() => setOffset((value) => Math.max(0, value - pageSize))}
+              disabled={offset === 0}
+              className="h-11 flex-1 font-mono text-[11.5px] text-sage transition-colors hover:text-bone disabled:opacity-30"
+            >
+              ← previous
+            </button>
+            <span className="grid h-11 place-items-center px-4 font-mono text-[10.5px] text-faint">
+              {Math.floor(offset / pageSize) + 1} / {Math.max(1, Math.ceil(total / pageSize))}
+            </span>
+            <button
+              onClick={() => setOffset((value) => value + pageSize)}
+              disabled={offset + leads.length >= total}
+              className="h-11 flex-1 font-mono text-[11.5px] text-sage transition-colors hover:text-bone disabled:opacity-30"
+            >
+              next →
+            </button>
+          </div>
         )}
       </Card>
 
-      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title={`Delete “${meta.name}”?`}>
+      <Modal open={confirmDelete} onClose={() => setConfirmDelete(false)} title={`Delete “${list?.name ?? "list"}”?`}>
         <p className="text-[13.5px] leading-relaxed text-sage">
-          This removes the list shell only — constituent leads stay in your workspace and exports already generated remain valid for 30 days.
+          This removes the list shell only — constituent leads stay in your workspace and exports already generated remain valid until they expire.
         </p>
         <div className="mt-6 flex gap-2.5">
-          <button onClick={() => setConfirmDelete(false)} className="h-11 flex-1 rounded-xl border border-line font-display text-sm font-medium text-sage hover:text-bone">Keep list</button>
-          <button onClick={() => (window.location.hash = "#/lists")} className="h-11 flex-1 rounded-xl bg-red-400/90 font-display text-sm font-semibold text-ink transition-transform hover:scale-[1.02] active:scale-95">
+          <button onClick={() => setConfirmDelete(false)} className="h-11 flex-1 rounded-xl border border-line font-display text-sm font-medium text-sage hover:text-bone">
+            Keep list
+          </button>
+          <button
+            onClick={() => void removeList()}
+            disabled={busy}
+            className="h-11 flex-1 rounded-xl bg-red-400/90 font-display text-sm font-semibold text-ink transition-transform hover:scale-[1.02] active:scale-95 disabled:opacity-40"
+          >
             Delete
           </button>
         </div>
@@ -298,7 +405,7 @@ const FILTERS = ["all", "running", "queued", "paused", "complete", "failed"] as 
 export function SearchesPage() {
   const { jobs, toggle, rerun } = useEngine();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
-  const rows = filter === "all" ? jobs : jobs.filter((j) => j.status === filter);
+  const rows = filter === "all" ? jobs : jobs.filter((job) => job.status === filter);
 
   return (
     <div>
@@ -313,73 +420,87 @@ export function SearchesPage() {
       />
 
       <div className="mb-5 flex gap-2 overflow-x-auto no-bar">
-        {FILTERS.map((f) => {
-          const n = f === "all" ? jobs.length : jobs.filter((j) => j.status === f).length;
+        {FILTERS.map((key) => {
+          const count = key === "all" ? jobs.length : jobs.filter((job) => job.status === key).length;
           return (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
+              key={key}
+              onClick={() => setFilter(key)}
               className={cn(
                 "flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-2 font-mono text-[11px] transition-all",
-                filter === f ? "border-zest/50 bg-zest/10 text-zest" : "border-line text-sage hover:text-bone"
+                filter === key ? "border-zest/50 bg-zest/10 text-zest" : "border-line text-sage hover:text-bone",
               )}
             >
-              {f}
-              <span className={cn("rounded-md px-1.5 py-0.5 text-[9.5px]", filter === f ? "bg-zest text-ink" : "bg-white/[0.06]")}>{n}</span>
+              {key}
+              <span className={cn("rounded-md px-1.5 py-0.5 text-[9.5px]", filter === key ? "bg-zest text-ink" : "bg-white/[0.06]")}>{count}</span>
             </button>
           );
         })}
       </div>
 
       {rows.length === 0 ? (
-        <EmptyState icon={Radar} title={`No ${filter} searches`} desc="Launch one and it will land here with live telemetry." action={<a href="#/findleads" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">New search</a>} />
+        <EmptyState
+          icon={Radar}
+          title={`No ${filter} searches`}
+          desc="Launch one and it will land here with live telemetry."
+          action={
+            <a href="#/findleads" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">
+              New search
+            </a>
+          }
+        />
       ) : (
         <div className="grid gap-3">
-          {rows.map((j) => (
-            <div key={j.slug} className="flex flex-col gap-4 rounded-2xl border border-line bg-coal p-5 transition-colors hover:border-line-strong sm:flex-row sm:items-center">
+          {rows.map((job) => (
+            <div key={job.slug} className="flex flex-col gap-4 rounded-2xl border border-line bg-coal p-5 transition-colors hover:border-line-strong sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <a href={`#/search/${j.slug}`} className="truncate font-display text-[15.5px] font-semibold text-bone transition-colors hover:text-zest">
-                    {j.query}
+                  <a href={`#/search/${job.slug}`} className="truncate font-display text-[15.5px] font-semibold text-bone transition-colors hover:text-zest">
+                    {job.query}
                   </a>
-                  {j.source === "ai" && (
+                  {job.source === "ai" && (
                     <span className="inline-flex items-center gap-1 rounded-md border border-zest/30 bg-zest/[0.06] px-1.5 py-0.5 font-mono text-[9px] text-zest">
                       <Sparkles className="size-2.5" /> AI
                     </span>
                   )}
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10.5px] text-faint">
-                  <span><User className="mr-1 inline size-3" />{j.found} found</span>
-                  {j.flags.email && <span>· {j.emails} emails</span>}
-                  <span>· {j.createdLabel}</span>
-                  {j.status === "running" && <span className="text-zest">· eta ~{j.etaMin}m</span>}
+                  <span>
+                    <User className="mr-1 inline size-3" />
+                    {job.found} found
+                  </span>
+                  {job.flags.email && <span>· {job.emails} emails</span>}
+                  <span>· {relTime(job.createdAt)}</span>
+                  {job.status === "running" && job.etaMin > 0 && <span className="text-zest">· eta ~{job.etaMin}m</span>}
                 </div>
                 <div className="mt-3 sm:max-w-md">
-                  <Meter value={j.processed} max={j.planned} tone={j.status === "paused" ? "amber" : "zest"} />
-                  <p className="mt-1.5 font-mono text-[9.5px] text-faint">{j.processed} / {j.planned} processed</p>
+                  <Meter value={job.processed} max={Math.max(1, job.planned)} tone={job.status === "paused" ? "amber" : "zest"} />
+                  <p className="mt-1.5 font-mono text-[9.5px] text-faint">
+                    {job.processed} / {job.planned} processed · {job.progress}%
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2.5 sm:flex-col sm:items-end">
-                <StatusChip status={j.status} />
+                <StatusChip status={job.status} />
                 <div className="flex gap-2">
-                  {(j.status === "running" || j.status === "paused") && (
+                  {(job.status === "running" || job.status === "paused") && (
                     <button
-                      onClick={() => toggle(j.slug)}
+                      onClick={() => void toggle(job.slug)}
                       className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 font-mono text-[11px] text-sage transition-colors hover:border-zest/40 hover:text-bone"
                     >
-                      {j.status === "running" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-                      {j.status === "running" ? "pause" : "resume"}
+                      {job.status === "running" ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                      {job.status === "running" ? "pause" : "resume"}
                     </button>
                   )}
-                  {(j.status === "failed" || j.status === "complete" || j.status === "paused") && (
+                  {(job.status === "failed" || job.status === "complete" || job.status === "paused") && (
                     <button
-                      onClick={() => rerun(j.slug)}
+                      onClick={() => void rerun(job.slug)}
                       className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-line px-3 font-mono text-[11px] text-sage transition-colors hover:border-zest/40 hover:text-bone"
                     >
                       <RefreshCw className="size-3.5" /> rerun
                     </button>
                   )}
-                  <a href={`#/search/${j.slug}`} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white/[0.04] px-3 font-mono text-[11px] text-bone transition-colors hover:bg-white/[0.08]">
+                  <a href={`#/search/${job.slug}`} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white/[0.04] px-3 font-mono text-[11px] text-bone transition-colors hover:bg-white/[0.08]">
                     details <ArrowRight className="size-3.5" />
                   </a>
                 </div>
@@ -397,27 +518,105 @@ export function SearchesPage() {
 /* ================================================================== */
 
 export function SearchDetailPage({ slug }: { slug: string }) {
-  const { get, toggle, rerun } = useEngine();
-  const job = get(slug);
+  const { toggle, rerun } = useEngine();
+  const [detail, setDetail] = useState<{
+    search: import("../lib/api").Job;
+    inputs: Array<{ id: string; seq: number; query_text: string; status: string; places_discovered: number; places_completed: number; last_error: string | null }>;
+    events: Array<{ id: number; type: string; level: string; message: string; at: string }>;
+    leads: LeadListItem[];
+    pendingInputs: number;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const [shown, setShown] = useState(8);
+  const [showAllLeads, setShowAllLeads] = useState(8);
 
-  const leads = useMemo(() => (job ? poolFull(job.query).slice(0, Math.min(job.found, 24)) : []), [job]);
+  const load = useMemo(
+    () => async () => {
+      try {
+        const payload = await api.searches.get(slug);
+        setDetail(payload);
+        setError(null);
+      } catch (cause) {
+        setError(cause instanceof ApiError ? cause.message : "The search could not be loaded");
+      }
+    },
+    [slug],
+  );
 
-  if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  useEffect(() => {
+    void load();
+    const interval = window.setInterval(() => void load(), 4_000);
+    return () => window.clearInterval(interval);
+  }, [load]);
 
-  if (!job) {
-    return <EmptyState icon={Radar} title="Search not found" desc="It may have been cleaned from the job history." action={<a href="#/searches" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">All searches</a>} />;
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [detail?.events.length]);
+
+  const job = detail?.search;
+
+  const exportSearch = async () => {
+    if (!job) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      await api.exports.create({ name: job.query, format: "csv", sourceType: "search", sourceId: job.id });
+      window.location.hash = "#/exports";
+    } catch (cause) {
+      setProblem(cause instanceof ApiError ? cause.message : "The export could not be queued");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveToList = async () => {
+    if (!job) return;
+    setBusy(true);
+    setProblem(null);
+    try {
+      const created = await api.lists.create({
+        name: job.query,
+        description: `Saved from the search “${job.query}”.`,
+        tag: job.source === "ai" ? "ai" : "search",
+        sourceSearchId: job.id,
+      });
+      window.location.hash = `#/list/${created.list.slug}`;
+    } catch (cause) {
+      setProblem(cause instanceof ApiError ? cause.message : "The list could not be created");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (error && !job) {
+    return (
+      <EmptyState
+        icon={Radar}
+        title="Search not found"
+        desc={error}
+        action={
+          <a href="#/searches" className="inline-flex h-10 items-center rounded-xl bg-zest px-5 font-display text-sm font-semibold text-ink">
+            All searches
+          </a>
+        }
+      />
+    );
   }
 
-  const seedSlug = job.query.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-  const pct = Math.round((job.processed / Math.max(1, job.planned)) * 100);
+  if (!job) return <Card className="p-10 text-center font-mono text-[11.5px] text-faint">loading search…</Card>;
+
+  const leads = detail?.leads ?? [];
+  const events = detail?.events ?? [];
 
   return (
     <div>
       <a href="#/searches" className="mb-5 inline-flex items-center gap-2 font-mono text-[11.5px] text-sage transition-colors hover:text-zest">
         <ArrowLeft className="size-3.5" /> all searches
       </a>
+
+      {problem && <Card className="mb-4 border-amber/40 p-4 text-[13px] text-amber">{problem}</Card>}
 
       {/* header */}
       <Card className="p-5 sm:p-7">
@@ -433,29 +632,42 @@ export function SearchDetailPage({ slug }: { slug: string }) {
               )}
             </div>
             <p className="mt-1.5 font-mono text-[11px] text-faint">
-              created {job.createdLabel} · duration {job.duration} · job #{slug.slice(0, 8)}
+              created {relTime(job.createdAt)} · duration {job.duration} · {job.rawStatus}
+              {job.workerId ? ` · worker ${job.workerId}` : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2.5">
             {(job.status === "running" || job.status === "paused") && (
-              <button onClick={() => toggle(job.slug)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-4 font-display text-[13px] font-medium text-bone transition-colors hover:border-zest/40">
+              <button
+                onClick={() => void toggle(job.slug)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-4 font-display text-[13px] font-medium text-bone transition-colors hover:border-zest/40"
+              >
                 {job.status === "running" ? <Pause className="size-4" /> : <Play className="size-4" />}
                 {job.status === "running" ? "Pause" : "Resume"}
               </button>
             )}
             {(job.status === "failed" || job.status === "complete" || job.status === "paused") && (
-              <button onClick={() => rerun(job.slug)} className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-4 font-display text-[13px] font-medium text-bone transition-colors hover:border-zest/40">
+              <button
+                onClick={() => void rerun(job.slug)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-line px-4 font-display text-[13px] font-medium text-bone transition-colors hover:border-zest/40"
+              >
                 <RefreshCw className="size-4" /> Rerun
               </button>
             )}
-            {job.status === "complete" && (
+            {job.found > 0 && (
               <>
-                {job.listSlug && (
-                  <a href={`#/list/${job.listSlug}`} className="inline-flex h-10 items-center gap-2 rounded-xl border border-zest/40 bg-zest/10 px-4 font-display text-[13px] font-medium text-zest">
-                    <FolderKanban className="size-4" /> Open list
-                  </a>
-                )}
-                <button onClick={() => download(`${seedSlug}-${job.found}leads.csv`, leadCsv(leads))} className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95">
+                <button
+                  onClick={() => void saveToList()}
+                  disabled={busy}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-zest/40 bg-zest/10 px-4 font-display text-[13px] font-medium text-zest disabled:opacity-40"
+                >
+                  <FolderKanban className="size-4" /> Save to list
+                </button>
+                <button
+                  onClick={() => void exportSearch()}
+                  disabled={busy}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink transition-transform hover:scale-[1.03] active:scale-95 disabled:opacity-40"
+                >
                   <Download className="size-4" /> Export
                 </button>
               </>
@@ -465,20 +677,27 @@ export function SearchDetailPage({ slug }: { slug: string }) {
 
         <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line lg:grid-cols-4">
           {[
-            [`${pct}%`, `${job.processed} / ${job.planned} processed`],
-            [job.found.toString(), "leads found"],
+            [`${job.progress}%`, `${job.processed} / ${job.planned} processed`],
+            [job.found.toString(), "unique leads"],
             [job.flags.email ? job.emails.toString() : "off", "emails captured"],
-            [job.status === "running" ? `~${job.etaMin}m` : job.duration, job.status === "running" ? "eta remaining" : "total runtime"],
-          ].map(([v, k], i) => (
-            <div key={i} className="bg-coal px-4 py-4 text-center">
-              <p className={cn("font-display text-xl font-bold", i === 0 ? "text-zest" : "text-bone")}>{v}</p>
-              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-faint">{k}</p>
+            [
+              job.status === "running" ? (job.etaMin > 0 ? `~${job.etaMin}m` : "measuring") : job.duration,
+              job.status === "running" ? "eta remaining" : "total runtime",
+            ],
+          ].map(([value, key], index) => (
+            <div key={key} className="bg-coal px-4 py-4 text-center">
+              <p className={cn("font-display text-xl font-bold", index === 0 ? "text-zest" : "text-bone")}>{value}</p>
+              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-wider text-faint">{key}</p>
             </div>
           ))}
         </div>
         <div className="mt-4">
-          <Meter value={job.processed} max={job.planned} tone={job.status === "paused" ? "amber" : "zest"} />
+          <Meter value={job.processed} max={Math.max(1, job.planned)} tone={job.status === "paused" ? "amber" : "zest"} />
         </div>
+        <p className="mt-3 font-mono text-[10.5px] text-faint">
+          {job.duplicates} duplicate{job.duplicates === 1 ? "" : "s"} skipped · {job.filtered} filtered · {job.errors} error{job.errors === 1 ? "" : "s"} ·{" "}
+          {detail?.pendingInputs ?? 0} input{detail?.pendingInputs === 1 ? "" : "s"} still queued
+        </p>
       </Card>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.35fr_1fr]">
@@ -488,38 +707,67 @@ export function SearchDetailPage({ slug }: { slug: string }) {
             <h3 className="flex items-center gap-2 font-display text-[15px] font-semibold text-bone">
               <Timer className="size-4 text-zest" /> engine log
             </h3>
-            <span className="font-mono text-[10px] text-faint">{job.log.length} events</span>
+            <span className="font-mono text-[10px] text-faint">{events.length} events</span>
           </div>
           <div ref={logRef} className="h-64 space-y-1.5 overflow-y-auto bg-[#0a0d0b] p-4 font-mono text-[11px] leading-relaxed sm:text-[11.5px]">
-            {job.log.map((l, i) => (
-              <motion.p key={`${i}-${job.log.length}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={l.includes("✔") ? "text-zest" : l.includes("✖") ? "text-red-300" : l.includes("⏸") ? "text-amber" : "text-sage"}>
-                {l}
+            {events.length === 0 && <p className="text-faint">No events yet — the worker writes here as it runs.</p>}
+            {events.map((event) => (
+              <motion.p
+                key={event.id}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className={
+                  event.level === "success" ? "text-zest" : event.level === "error" ? "text-red-300" : event.level === "warn" ? "text-amber" : "text-sage"
+                }
+              >
+                [{new Date(event.at).toLocaleTimeString("en-GB")}] {event.message}
               </motion.p>
             ))}
-            {job.status === "running" && <p><span className="inline-block h-3 w-1.5 animate-blink bg-zest/80" /></p>}
+            {job.status === "running" && (
+              <p>
+                <span className="inline-block h-3 w-1.5 animate-blink bg-zest/80" />
+              </p>
+            )}
           </div>
         </Card>
 
-        {/* flags */}
+        {/* flags + inputs */}
         <Card className="p-5">
           <h3 className="font-display text-[15px] font-semibold text-bone">Run configuration</h3>
           <div className="mt-4 grid grid-cols-2 gap-2.5">
             {[
               ["email crawl", job.flags.email ? "on" : "off"],
-              ["mode", job.flags.fastMode ? "fast (beta)" : "standard"],
+              ["mode", job.flags.fastMode ? "fast" : "standard"],
               ["depth", `${job.flags.depth} levels`],
               ["radius", `${job.flags.radius} km`],
               ["language", job.flags.lang],
-              ["resume-safe", "checkpointed"],
-            ].map(([k, v]) => (
-              <div key={k} className="rounded-lg border border-line bg-white/[0.02] px-3 py-2.5">
-                <p className="font-mono text-[9px] uppercase tracking-widest text-faint">{k}</p>
-                <p className={cn("mt-0.5 font-mono text-[12px]", v === "on" ? "text-zest" : "text-bone")}>{v}</p>
+              ["engine", job.engineVersion ?? "pending"],
+            ].map(([key, value]) => (
+              <div key={key} className="rounded-lg border border-line bg-white/[0.02] px-3 py-2.5">
+                <p className="font-mono text-[9px] uppercase tracking-widest text-faint">{key}</p>
+                <p className={cn("mt-0.5 font-mono text-[12px]", value === "on" ? "text-zest" : "text-bone")}>{value}</p>
               </div>
             ))}
           </div>
+          {(detail?.inputs.length ?? 0) > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 font-mono text-[9px] uppercase tracking-widest text-faint">inputs</p>
+              <div className="max-h-40 space-y-1.5 overflow-y-auto">
+                {(detail?.inputs ?? []).map((input) => (
+                  <div key={input.id} className="flex items-center justify-between rounded-lg border border-line bg-white/[0.02] px-3 py-2">
+                    <span className="truncate font-mono text-[11px] text-sage">
+                      {input.seq + 1}. {input.query_text}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-faint">
+                      {input.status} · {input.places_completed}/{input.places_discovered}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <p className="mt-4 rounded-lg border border-line bg-white/[0.02] px-3 py-2.5 font-mono text-[10px] leading-relaxed text-faint">
-            interrupted runs resume from the last completed sector — nothing is re-fetched.
+            Completed inputs are never refetched: a rerun or a worker restart continues from the inputs that are still pending.
           </p>
         </Card>
       </div>
@@ -530,32 +778,40 @@ export function SearchDetailPage({ slug }: { slug: string }) {
           <h3 className="flex items-center gap-2 font-display text-base font-semibold text-bone">
             <CheckCircle2 className="size-4 text-zest" /> Results
           </h3>
-          <span className="font-mono text-[10.5px] text-faint">{job.found > 0 ? `showing ${Math.min(shown, leads.length)} of ${job.found}` : "awaiting first sector"}</span>
+          <span className="font-mono text-[10.5px] text-faint">
+            {job.found > 0 ? `showing ${Math.min(showAllLeads, leads.length)} of ${job.found}` : "awaiting first result"}
+          </span>
         </div>
-        {job.found === 0 ? (
+        {leads.length === 0 ? (
           <div className="grid place-items-center px-6 py-14 text-center">
-            <Hourglass className="size-6 animate-spin text-zest" />
-            <p className="mt-4 text-[13px] text-sage">Engine is sweeping sectors — first candidates arrive any second.</p>
+            {job.status === "running" ? (
+              <>
+                <Hourglass className="size-6 animate-spin text-zest" />
+                <p className="mt-4 text-[13px] text-sage">The engine is sweeping — candidates appear here as soon as they are written.</p>
+              </>
+            ) : (
+              <p className="text-[13px] text-sage">This search has no leads yet.</p>
+            )}
           </div>
         ) : (
           <>
             <div className="divide-y divide-line/60">
-              {leads.slice(0, shown).map((l) => (
-                <a key={`${l.seed}|${l.idx}`} href={`#/lead/${seedSlug}__${l.idx}`} className="flex items-center gap-3.5 px-5 py-3.5 transition-colors hover:bg-white/[0.02]">
+              {leads.slice(0, showAllLeads).map((lead) => (
+                <a key={lead.id} href={`#/lead/${lead.slug}`} className="flex items-center gap-3.5 px-5 py-3.5 transition-colors hover:bg-white/[0.02]">
                   <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-line bg-white/[0.03] font-display text-[11px] font-bold text-zest">
-                    {l.name.split(" ").slice(0, 2).map((w) => w[0]).join("")}
+                    {initials(lead.name)}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13.5px] font-medium text-bone">{l.name}</p>
-                    <p className="truncate font-mono text-[10.5px] text-zest/80">{l.email || l.phone}</p>
+                    <p className="truncate text-[13.5px] font-medium text-bone">{lead.name}</p>
+                    <p className="truncate font-mono text-[10.5px] text-zest/80">{lead.email || lead.phone || "no contact captured"}</p>
                   </div>
-                  <span className="hidden font-mono text-[11px] text-amber sm:inline">★ {l.rating.toFixed(1)}</span>
+                  {lead.rating > 0 && <span className="hidden font-mono text-[11px] text-amber sm:inline">★ {lead.rating.toFixed(1)}</span>}
                   <ArrowRight className="size-3.5 text-faint" />
                 </a>
               ))}
             </div>
-            {shown < leads.length && (
-              <button onClick={() => setShown((s) => s + 8)} className="h-11 w-full border-t border-line font-mono text-[11.5px] text-sage hover:text-bone">
+            {showAllLeads < leads.length && (
+              <button onClick={() => setShowAllLeads((value) => value + 8)} className="h-11 w-full border-t border-line font-mono text-[11.5px] text-sage hover:text-bone">
                 show more
               </button>
             )}

@@ -7,6 +7,8 @@ import { badRequest, notFound } from "../_lib/errors";
 import { toLeadListItem, toList, type LeadRow } from "../_lib/serialize";
 
 type ListRow = Parameters<typeof toList>[0];
+/** `loadList` always resolves the source search slug, so links can be built. */
+type LoadedList = ListRow & { source_search_slug: string | null };
 
 const patchSchema = z.object({
   name: z.string().min(1).max(120).optional(),
@@ -20,14 +22,20 @@ const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("remove_leads"), leadIds: z.array(z.string().uuid()).min(1).max(1000) }),
 ]);
 
-async function loadList(workspaceId: string, slug: string): Promise<ListRow> {
-  const rows = await query<ListRow[]>(
-    admin().from("lists").select("*").eq("workspace_id", workspaceId).eq("slug", slug).is("deleted_at", null).limit(1),
+async function loadList(workspaceId: string, slug: string): Promise<LoadedList> {
+  const rows = await query<Array<ListRow & { source_search: { slug: string } | null }>>(
+    admin()
+      .from("lists")
+      .select("*, source_search:searches(slug)")
+      .eq("workspace_id", workspaceId)
+      .eq("slug", slug)
+      .is("deleted_at", null)
+      .limit(1),
     "list lookup",
   );
   const list = rows[0];
   if (!list) throw notFound("List not found");
-  return list;
+  return { ...list, source_search_slug: list.source_search?.slug ?? null };
 }
 
 export default route(
@@ -85,7 +93,7 @@ export default route(
 
       const rows = await query<ListRow[]>(admin().from("lists").update(patch).eq("id", list.id).select("*"), "list update");
       await audit(ctx, { action: "list.updated", targetType: "list", targetId: list.id, metadata: patch });
-      return ok({ list: toList(rows[0]) });
+      return ok({ list: toList({ ...rows[0], source_search_slug: list.source_search_slug }) });
     }
 
     if (method === "DELETE") {

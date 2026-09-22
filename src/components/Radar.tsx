@@ -193,7 +193,7 @@ export default function Radar() {
                 “dentists in Berlin” + email
               </p>
               <p className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-faint">
-                live extraction feed
+                simulated extraction feed
               </p>
             </div>
             <span className="shrink-0 rounded-md bg-zest/10 px-2 py-1 font-mono text-[11px] font-semibold text-zest">

@@ -16,8 +16,11 @@ import {
   X,
 } from "lucide-react";
 import { Logo } from "../components/ui";
+import { api, ApiError } from "../lib/api";
 import { useEngine } from "./engine";
-import { PLAN_USAGE } from "./data";
+import { useNotifications } from "./hooks";
+import { useSession, useWorkspace } from "./session";
+import { initials, relTime } from "./data";
 import { cn } from "../utils/cn";
 
 /* ------------------------------------------------------------------ */
@@ -196,20 +199,95 @@ function NavLink({ slug, label, icon: Icon, active, badge }: { slug: string; lab
 }
 
 function QuotaWidget() {
-  const { used, quota } = PLAN_USAGE;
+  const { plan, quota, status } = useWorkspace();
+
+  if (status !== "signed_in") {
+    return (
+      <div className="block rounded-xl border border-line bg-white/[0.02] p-4">
+        <p className="font-mono text-[10.5px] text-faint">quota loads with your workspace…</p>
+      </div>
+    );
+  }
+
+  const used = quota?.leads.used ?? 0;
+  const included = quota?.leads.included ?? Number(plan?.leads_per_period ?? 0);
+  const pct = included > 0 ? Math.min(100, Math.round((used / included) * 100)) : 0;
+
   return (
     <a href="#/billing" className="block rounded-xl border border-line bg-white/[0.02] p-4 transition-colors hover:border-zest/30">
       <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-faint">
-        <span>Growth quota</span>
-        <span className="text-zest">{Math.round((used / quota) * 100)}%</span>
+        <span>{plan?.name ?? "Workspace"} quota</span>
+        <span className="text-zest">{pct}%</span>
       </div>
       <div className="mt-2.5">
-        <Meter value={used} max={quota} />
+        <Meter value={used} max={Math.max(1, included)} />
       </div>
       <p className="mt-2 font-mono text-[10.5px] text-sage">
-        {used.toLocaleString()} / {quota.toLocaleString()} leads
+        {used.toLocaleString()} / {included.toLocaleString()} leads this cycle
       </p>
     </a>
+  );
+}
+
+/** Notifications are read from the API; nothing here is seeded. */
+function NotificationsBell() {
+  const [open, setOpen] = useState(false);
+  const { data, reload, error } = useNotifications(8);
+  const items = data?.items ?? [];
+  const unread = data?.unread ?? 0;
+
+  const markAll = async () => {
+    try {
+      await api.notifications.mark({ all: true, read: true });
+      await reload();
+    } catch (cause) {
+      if (cause instanceof ApiError) console.warn(cause.message);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((value) => !value)}
+        className="relative grid size-8 place-items-center rounded-full border border-line text-faint transition-colors hover:text-bone"
+        aria-label="Notifications"
+      >
+        <Bell className="size-4" />
+        {unread > 0 && (
+          <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-zest px-1 font-mono text-[9px] font-bold text-ink">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-11 z-50 w-80 overflow-hidden rounded-2xl border border-line-strong bg-graphite shadow-2xl">
+          <div className="flex items-center justify-between border-b border-line px-4 py-3">
+            <span className="font-display text-[13px] font-semibold text-bone">Notifications</span>
+            {unread > 0 && (
+              <button onClick={() => void markAll()} className="font-mono text-[10.5px] text-zest hover:underline">
+                mark all read
+              </button>
+            )}
+          </div>
+          <div className="max-h-80 divide-y divide-line/60 overflow-y-auto">
+            {error && <p className="px-4 py-3 font-mono text-[11px] text-amber">{error}</p>}
+            {!error && items.length === 0 && <p className="px-4 py-6 text-center font-mono text-[11px] text-faint">Nothing yet — searches, exports and billing events land here.</p>}
+            {items.map((item) => (
+              <a
+                key={item.id}
+                href={item.link ? `#${item.link.replace(/^#/, "")}` : "#/dashboard"}
+                onClick={() => setOpen(false)}
+                className={cn("block px-4 py-3 transition-colors hover:bg-white/[0.03]", !item.read && "bg-zest/[0.05]")}
+              >
+                <p className="text-[12.5px] font-medium text-bone">{item.title}</p>
+                {item.body && <p className="mt-0.5 line-clamp-2 text-[11.5px] text-sage">{item.body}</p>}
+                <p className="mt-1 font-mono text-[10px] text-faint">{relTime(item.createdAt)}</p>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -220,6 +298,10 @@ function QuotaWidget() {
 export function AppShell({ route, children }: { route: string; children: ReactNode }) {
   const [more, setMore] = useState(false);
   const { jobs } = useEngine();
+  const { user, me, signOut } = useSession();
+  const displayName = me?.profile?.full_name ?? user?.fullName ?? user?.email ?? "Your workspace";
+  const planName = me?.plan?.name ?? "Workspace";
+  const badges = initials(displayName);
   const liveCount = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
   const isActive = (slug: string) => route === slug || route.startsWith(slug.replace(/s$/, "") + "/");
 
@@ -241,8 +323,9 @@ export function AppShell({ route, children }: { route: string; children: ReactNo
     <div className="min-h-screen bg-ink font-body text-bone antialiased">
       {/* ---------------- desktop sidebar ---------------- */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-[248px] flex-col border-r border-line bg-coal/60 backdrop-blur-xl lg:flex">
-        <div className="flex h-16 items-center px-5">
+        <div className="flex h-16 items-center justify-between px-5">
           <a href="#/dashboard" aria-label="dashboard"><Logo /></a>
+          <NotificationsBell />
         </div>
         <div className="flex-1 space-y-6 overflow-y-auto px-3.5 pb-4">
           <div>
@@ -273,14 +356,18 @@ export function AppShell({ route, children }: { route: string; children: ReactNo
         <div className="space-y-3 border-t border-line p-3.5">
           <QuotaWidget />
           <div className="flex items-center gap-3 rounded-xl px-2 py-1.5">
-            <span className="grid size-9 place-items-center rounded-lg border border-zest/25 bg-zest/[0.08] font-display text-xs font-bold text-zest">MV</span>
+            <span className="grid size-9 place-items-center rounded-lg border border-zest/25 bg-zest/[0.08] font-display text-xs font-bold text-zest">{badges}</span>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium text-bone">Mara Voss</p>
-              <p className="truncate font-mono text-[10px] text-faint">Growth plan</p>
+              <p className="truncate text-[13px] font-medium text-bone">{displayName}</p>
+              <p className="truncate font-mono text-[10px] text-faint">{planName} plan</p>
             </div>
-            <a href="#/signin" aria-label="Sign out" className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-white/[0.05] hover:text-bone">
+            <button
+              onClick={() => void signOut()}
+              aria-label="Sign out"
+              className="grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-white/[0.05] hover:text-bone"
+            >
               <LogOut className="size-4" />
-            </a>
+            </button>
           </div>
         </div>
       </aside>
@@ -295,11 +382,11 @@ export function AppShell({ route, children }: { route: string; children: ReactNo
               <span className="relative size-1.5 rounded-full bg-zest" />
             </span>
             <span className="font-mono text-[10.5px] text-sage">
-              {(PLAN_USAGE.quota - PLAN_USAGE.used).toLocaleString()} left
+              {me?.quota ? `${me.quota.leads.remaining.toLocaleString()} left` : "quota"}
             </span>
           </a>
-          <span className="grid size-8 place-items-center rounded-full border border-line text-faint"><Bell className="size-4" /></span>
-          <span className="grid size-8 place-items-center rounded-full border border-zest/25 bg-zest/[0.08] font-display text-[11px] font-bold text-zest">M</span>
+          <NotificationsBell />
+          <span className="grid size-8 place-items-center rounded-full border border-zest/25 bg-zest/[0.08] font-display text-[11px] font-bold text-zest">{badges}</span>
         </div>
       </header>
 

@@ -285,6 +285,7 @@ export function toList(list: {
   avg_rating: number | null;
   completeness: number | null;
   source_search_id: string | null;
+  source_search_slug?: string | null;
   updated_at: string;
 }) {
   return {
@@ -297,7 +298,9 @@ export function toList(list: {
     avgRating: list.avg_rating ?? 0,
     completeness: list.completeness ?? 0,
     updatedAgo: list.updated_at,
-    jobSlug: list.source_search_id,
+    // A link has to resolve: the SPA routes by slug, so expose the search slug
+    // (never the raw uuid, which no page can open).
+    jobSlug: list.source_search_slug ?? null,
     tag: list.tag ?? "List",
     description: list.description ?? "",
   };
