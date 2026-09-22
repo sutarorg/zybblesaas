@@ -175,6 +175,16 @@ export default route(
       .join("\n");
 
     const hash = inputHash([PROMPT_VERSION, body.message, snapshot.leadsUsed, body.leadSlug ?? null, body.conversationSlug ?? null]);
+    // Reserve first: the reservation is the authority on quota, so a refused
+    // call must not leave a `running` ai_runs row behind. The dedupe key keeps
+    // an identical replay from being charged twice.
+    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
+      dedupeKey: `ai-chat:${ctx.workspaceId}:${hash}`,
+      refType: "ai_run",
+      metadata: { task: "AI_CHAT", conversation_id: conversationId },
+    });
+    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
+
     const runId = await startRun({
       workspaceId: ctx.workspaceId,
       task: "AI_CHAT",
@@ -184,13 +194,6 @@ export default route(
       createdBy: ctx.caller?.userId ?? null,
       conversationId,
     });
-
-    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
-      dedupeKey: `ai-chat:${ctx.workspaceId}:${hash}`,
-      refType: "ai_run",
-      metadata: { task: "AI_CHAT", conversation_id: conversationId },
-    });
-    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
 
     try {
       const result = await generate<string>({

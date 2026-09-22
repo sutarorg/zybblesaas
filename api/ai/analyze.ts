@@ -166,6 +166,17 @@ export default route(
         .join("\n"),
     );
 
+    // Reserve first: the reservation is the authority on quota, so a refused
+    // call must not leave a `running` ai_runs row behind. The dedupe key keeps
+    // an identical replay from being charged twice.
+    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
+      dedupeKey: `ai-lead:${ctx.workspaceId}:${hash}`,
+      refType: "lead",
+      refId: lead.id,
+      metadata: { task: "LEAD_ANALYSIS" },
+    });
+    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
+
     const runId = await startRun({
       workspaceId: ctx.workspaceId,
       task: "LEAD_ANALYSIS",
@@ -175,14 +186,6 @@ export default route(
       createdBy: ctx.caller?.userId ?? null,
       leadId: lead.id,
     });
-
-    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
-      dedupeKey: `ai-lead:${ctx.workspaceId}:${hash}`,
-      refType: "lead",
-      refId: lead.id,
-      metadata: { task: "LEAD_ANALYSIS" },
-    });
-    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
 
     try {
       const result = await generate<{

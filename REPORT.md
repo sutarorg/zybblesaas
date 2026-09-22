@@ -7,8 +7,8 @@ provider is marked as such.
 
 Repository state: branch `arena/01a0c96b-zybblesaas`, HEAD `9c17b6b` (PR #1).
 Gates: `npx tsc -p tsconfig.json --noEmit` clean, `npx tsc -p tsconfig.api.json
---noEmit` clean, `npm test` → 54/54 (migrations, RLS/security, queue, schema
-contract), `npm run build` → success, `npm run smoke:api` → 112 requests with no
+--noEmit` clean, `npm test` → 59/59 (migrations, RLS/security, queue, schema
+contract, API/worker job-type contract), `npm run build` → success, `npm run smoke:api` → 112 requests with no
 secret leakage, and CI run `35750918159` green on both jobs — including
 `go vet ./...` and `go build ./...` for the worker.
 
@@ -233,8 +233,10 @@ fabricated data, and `/api/health` returned `503` with `database.ok:false` and a
 message naming the missing migrations — the honest failure this whole design is
 built around.
 
-The other executed evidence: `npm test` (54 tests against a real PostgreSQL 16
-engine — migrations, RLS/security, queue semantics, API/schema contract),
+The other executed evidence: `npm test` (59 tests against a real PostgreSQL 16
+engine — migrations, RLS/security, queue semantics, API/schema contract, and a
+cross-language suite that checks the API and worker agree on job types and that
+quota is always reserved before an AI run row is opened),
 `npx tsc -p tsconfig.json --noEmit`, `npx tsc -p tsconfig.api.json --noEmit`
 (which now also covers the smoke script) and `npm run build`.
 

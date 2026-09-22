@@ -272,6 +272,12 @@ The worker calls Gemini with a JSON response schema, writes the result into
 Before spending a request it reserves quota with `public.usage_reserve`, keyed by
 the cache key, so re-scoring unchanged data does not double-charge.
 
+`ai_lead_scoring` is enqueued by `api/ai/score.ts`; `ai_lead_analysis` is
+executed for real whenever such a job reaches the queue, and nothing in `api/`
+enqueues one today (the API analyses a single lead synchronously instead).
+`tests/api-contract.test.ts` pins both lists, so adding or removing an enqueuer
+is a deliberate change rather than a silent drift.
+
 Scraped content is passed to the model inside explicit
 `<<<untrusted:label>>> … <<<end>>>` markers with a system instruction that
 treats it as evidence only. The model never receives database credentials, the

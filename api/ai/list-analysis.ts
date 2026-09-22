@@ -122,6 +122,17 @@ export default route(
       .join("\n");
 
     const hash = inputHash([PROMPT_VERSION, list.id, rows.length, stats.with_email, body.question ?? null, env.geminiModel]);
+    // Reserve first: the reservation is the authority on quota, so a refused
+    // call must not leave a `running` ai_runs row behind. The dedupe key keeps
+    // an identical replay from being charged twice.
+    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
+      dedupeKey: `ai-list:${ctx.workspaceId}:${hash}`,
+      refType: "list",
+      refId: list.id,
+      metadata: { task: "LIST_ANALYSIS" },
+    });
+    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
+
     const runId = await startRun({
       workspaceId: ctx.workspaceId,
       task: "LIST_ANALYSIS",
@@ -131,14 +142,6 @@ export default route(
       createdBy: ctx.caller?.userId ?? null,
       listId: list.id,
     });
-
-    const allowed = await reserveUsage(ctx.workspaceId, "ai_run", ent.plan.ai_runs_per_period, {
-      dedupeKey: `ai-list:${ctx.workspaceId}:${hash}`,
-      refType: "list",
-      refId: list.id,
-      metadata: { task: "LIST_ANALYSIS" },
-    });
-    if (!allowed) throw quotaExceeded("AI quota for this period is used up", aiQuota(ent));
 
     try {
       const result = await generate<{

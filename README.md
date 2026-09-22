@@ -72,7 +72,7 @@ npx supabase db push           # applies supabase/migrations/*.sql in order
 ### Tests and gates
 
 ```bash
-npm test                       # vitest: migrations, RLS, queue semantics, API/schema contract
+npm test                       # vitest: migrations, RLS, queue semantics, API/schema/job-type contracts
 npm run typecheck              # strict TypeScript for the SPA
 npx tsc -p tsconfig.api.json --noEmit   # strict TypeScript for the API
 npm run build                  # production bundle
