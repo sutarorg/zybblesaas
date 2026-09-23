@@ -44,6 +44,9 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 
 	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
+		if explained := explainConnectFailure(dsn, err); explained != err.Error() {
+			return nil, fmt.Errorf("ping: %s: %w", explained, err)
+		}
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 

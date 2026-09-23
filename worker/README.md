@@ -17,7 +17,7 @@ Maps engine, because that work takes minutes and must survive restarts.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | yes | Supabase Postgres connection string (`sslmode=require`) |
+| `DATABASE_URL` | yes | **Session pooler** string from Supabase Connect (`aws-…pooler.supabase.com:5432`, user `postgres.<ref>`, `sslmode=require`). The direct `db.<ref>.supabase.co` host is IPv6-only and fails on Railway (`network is unreachable`). |
 | `SUPABASE_URL` | for exports | Project URL |
 | `SUPABASE_SECRET_KEY` | for exports | Server key (or legacy `SUPABASE_SERVICE_ROLE_KEY`) |
 | `GEMINI_API_KEY` | for AI jobs | Never exposed to the browser |

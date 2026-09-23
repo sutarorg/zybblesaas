@@ -45,6 +45,9 @@ jobs:
       - name: Vet
         working-directory: worker
         run: go vet ./...
+      - name: Test
+        working-directory: worker
+        run: go test ./...
       - name: Build
         working-directory: worker
         run: go build ./...

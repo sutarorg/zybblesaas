@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -107,7 +108,8 @@ func run() error {
 		return nil
 	}
 
-	logger.Info("connecting to database", "worker_id", cfg.WorkerID)
+	// Host only — DATABASE_URL embeds the password and must never be logged.
+	logger.Info("connecting to database", "worker_id", cfg.WorkerID, "database_host", databaseHost(cfg.DatabaseURL))
 	var st *store.Store
 	for {
 		connectCtx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
@@ -317,6 +319,16 @@ func run() error {
 			}()
 		}
 	}
+}
+
+// databaseHost extracts the hostname from DATABASE_URL for logs. It never
+// returns userinfo or the query string, so the password cannot leak.
+func databaseHost(dsn string) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Host == "" {
+		return "unknown"
+	}
+	return parsed.Host
 }
 
 func sleep(ctx context.Context, duration time.Duration) bool {
