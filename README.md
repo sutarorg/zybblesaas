@@ -37,7 +37,7 @@ measurements say otherwise. See `ARCHITECTURE.md`.
 ## Repository map
 
 ```
-api/                     Vercel serverless API (one file per route, `_lib/` for shared code)
+api/                     Vercel serverless API (central router in [...path].ts & index.ts, _routes/ for handlers, _lib/ for shared code)
 src/                     The React SPA (routes are unchanged: /dashboard, /findleads, …)
 worker/                  Go worker: queue loop + Gosom engine + writers + health server
 supabase/migrations/     Every table, policy, function and seed row (0001 … 0011)
