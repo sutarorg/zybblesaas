@@ -46,7 +46,7 @@ Either route works:
 npx supabase link --project-ref <project-ref>
 npx supabase db push
 
-# B. Plain psql against the direct connection
+# B. Plain psql against DATABASE_URL (session pooler or direct — whatever you use in Railway)
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/0001_extensions_and_helpers.sql
 # … and the rest, in filename order
 ```
@@ -119,15 +119,34 @@ still works: every live view polls as a fallback.
 
 ### 1.7 Database connection string for the worker
 
-Railway needs the **direct** connection (or the session pooler), not the
-transaction pooler:
+**Use the Session pooler, not the direct host.** Railway has no outbound IPv6,
+and Supabase's direct host (`db.<project-ref>.supabase.co`) is AAAA-only unless
+the paid IPv4 add-on is enabled. A direct URL looks correct but fails forever
+with `database connection failed … network is unreachable`.
+
+In the Supabase dashboard click **Connect → Session pooler** and copy the
+string as-is:
 
 ```
-postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+postgresql://postgres.<project-ref>:<password>@aws-<index>-<region>.pooler.supabase.com:5432/postgres?sslmode=require
 ```
 
-The worker keeps a bounded long-lived pool, so pgbouncer's transaction mode is
-the wrong choice here.
+Notes that matter:
+
+| Piece | Value | Why |
+| --- | --- | --- |
+| Host | `aws-<index>-<region>.pooler.supabase.com` | IPv4. Copy from Connect — the index cannot be guessed from the region. |
+| Port | `5432` (session) | Session mode keeps prepared statements and long-lived sessions working. |
+| User | `postgres.<project-ref>` | Pooler usernames are tenant-qualified; plain `postgres` only works on the direct host. |
+| `sslmode` | `require` | Mandatory for Supabase. |
+
+Do **not** use the transaction pooler (`…:6543`): the worker keeps a bounded
+long-lived pool, which is the wrong fit for pgbouncer/Supavisor transaction
+mode.
+
+If you enable Railway's outbound IPv6 feature flag *and* it can reach your
+region's AWS IPv6 range, the direct host can work — but the session pooler is
+the path that works with default Railway networking.
 
 ---
 
@@ -221,8 +240,9 @@ Nothing is simulated.
    `restartPolicyType = ON_FAILURE`.
 2. **Variables** — the worker's set from `.env.example`:
 
-   *Required:* `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`,
-   `APP_URL`, `GEMINI_API_KEY`.
+   *Required:* `DATABASE_URL` (Supabase **Session pooler** string — see §1.7;
+   the direct `db.*.supabase.co` host is IPv6-only and will never connect from
+   Railway), `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `APP_URL`, `GEMINI_API_KEY`.
    *Recommended:* `WORKER_ID` (e.g. `worker-1`), `WORKER_PROXIES`,
    `WORKER_CONCURRENCY`, `WORKER_MAX_DEPTH`, `RESEND_API_KEY`, `EMAIL_FROM`.
    *Keep:* `DISABLE_TELEMETRY=1`.
