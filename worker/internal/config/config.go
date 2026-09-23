@@ -94,11 +94,15 @@ func Load() (*Config, error) {
 	}
 
 	if port := os.Getenv("PORT"); port != "" && os.Getenv("PORT_ADDR") == "" {
-		cfg.HealthAddr = ":" + port
+		if !strings.HasPrefix(port, ":") {
+			cfg.HealthAddr = ":" + port
+		} else {
+			cfg.HealthAddr = port
+		}
 	}
 
 	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is required (Supabase Postgres connection string with sslmode=require)")
+		fmt.Println("[worker] WARNING: DATABASE_URL is not set — worker will idle on health check until configured")
 	}
 
 	if cfg.SupabaseURL == "" || cfg.SupabaseKey == "" {

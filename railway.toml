@@ -12,7 +12,6 @@ watchPatterns = ["worker/**"]
 # One replica keeps browser memory predictable; raise numReplicas and the queue
 # is still safe because claiming uses FOR UPDATE SKIP LOCKED.
 numReplicas = 1
-startCommand = "/usr/local/bin/zybble-worker"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

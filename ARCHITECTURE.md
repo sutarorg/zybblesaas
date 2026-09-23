@@ -82,8 +82,10 @@ which are safe precisely because every table is protected by RLS.
 
 ### 2.2 API (`api/**`, Vercel Node 22)
 
-Every route is `export default route({...}, handler)` from `api/_lib/http.ts`,
-which provides:
+Every route is `export default route({...}, handler)` under `api/_routes/`,
+dispatched centrally via `api/[...path].ts` and `api/index.ts` through `api/_lib/router.ts`.
+This architecture ensures total deployed Serverless Functions stay at 2, well within
+Vercel's Hobby plan limit of 12 functions. `route()` from `api/_lib/http.ts` provides:
 
 - method allow-listing (`405` with `Allow`),
 - auth modes `none | session | api_key | both` (session = Supabase JWT,

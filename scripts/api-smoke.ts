@@ -9,7 +9,8 @@
  *   • unauthenticated calls get 401, and provider/database-less calls get an
  *     honest 503 / 5xx envelope rather than fabricated data,
  *   • /api/system reports the truth about what is configured,
- *   • nothing in any response leaks a secret-shaped value.
+ *   • nothing in any response leaks a secret-shaped value,
+ *   • the central router in api/_lib/router dispatches requests correctly.
  *
  * Run with:  npx tsx scripts/api-smoke.ts
  * (With SUPABASE_URL/SUPABASE_SECRET_KEY set, the 503 expectations become real
@@ -68,7 +69,7 @@ function request(overrides: Partial<IncomingRequest> = {}): IncomingRequest {
   };
 }
 
-function routeFiles(dir = "api", acc: string[] = []): string[] {
+function routeFiles(dir = "api/_routes", acc: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
@@ -82,7 +83,7 @@ function routeFiles(dir = "api", acc: string[] = []): string[] {
 }
 
 function apiPath(file: string): string {
-  return "/" + file.replace(/\.ts$/, "").replace(/\[([^\]]+)\]/g, "sample-$1");
+  return "/" + file.replace(/^api\/_routes\/?/, "api/").replace(/\.ts$/, "").replace(/\[([^\]]+)\]/g, "sample-$1");
 }
 
 const SECRET_SHAPES = [
@@ -156,7 +157,7 @@ async function main() {
   }
 
   // 5. The public status endpoint must describe reality.
-  const system = (await import(pathToFileURL(join(process.cwd(), "api/system.ts")).href)) as {
+  const system = (await import(pathToFileURL(join(process.cwd(), "api/_routes/system.ts")).href)) as {
     default: (req: IncomingRequest, res: OutgoingResponse) => Promise<unknown>;
   };
   const { res: systemRes, captured: systemBody } = fakeResponse();
@@ -165,6 +166,23 @@ async function main() {
   if (systemBody.status !== 200) problems.push(`/api/system returned ${systemBody.status}`);
   if (typeof body?.features?.ai !== "boolean" || typeof body?.features?.billing !== "boolean") {
     problems.push("/api/system does not report boolean feature flags");
+  }
+
+  // 6. Test the central router with both path query param and url pathing.
+  const router = (await import(pathToFileURL(join(process.cwd(), "api/_lib/router.ts")).href)) as {
+    default: (req: IncomingRequest, res: OutgoingResponse) => Promise<unknown>;
+  };
+  const { res: routerRes, captured: routerBody } = fakeResponse();
+  await router.default(request({ url: "/api/system", query: { path: "system" } }), routerRes);
+  if (routerBody.status !== 200) {
+    problems.push(`api/_lib/router failed to route /api/system (got ${routerBody.status})`);
+  }
+
+  const { res: catchallRes, captured: catchallBody } = fakeResponse();
+  await router.default(request({ url: "/api/billing/plans", query: { path: ["billing", "plans"] } }), catchallRes);
+  // /api/billing/plans returns 200 when DB is present or 503 when running without DB (not 404).
+  if (catchallBody.status !== 200 && catchallBody.status !== 503) {
+    problems.push(`api/_lib/router failed to route /api/billing/plans (got ${catchallBody.status})`);
   }
 
   // ---- report -----------------------------------------------------------------
@@ -199,6 +217,7 @@ async function main() {
   }
   console.log("✓ every route answered, methods are enforced, anonymous calls are refused,");
   console.log("✓ malformed bodies produce the error envelope, and no response leaked a secret.");
+  console.log("✓ central router verified successfully.");
 }
 
 void main();

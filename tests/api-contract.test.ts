@@ -11,6 +11,8 @@
  *   * every job type the API enqueues is one the worker actually handles;
  *   * every job type the worker enables by default is allowed by the queue's
  *     check constraint and has a seeded priority.
+ *   * the number of Serverless Functions in api/ stays <= 12 to respect Vercel's
+ *     Hobby plan deployment limit.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -34,8 +36,8 @@ function tsFiles(dir: string): Array<{ path: string; text: string }> {
   return out;
 }
 
-const aiFiles = tsFiles("api/ai");
-const apiFiles = [...tsFiles("api"), ...tsFiles("api/_lib")];
+const aiFiles = tsFiles("api/_routes/ai");
+const apiFiles = [...tsFiles("api"), ...tsFiles("api/_lib"), ...tsFiles("api/_routes")];
 const workerText = read("worker/internal/jobs/jobs.go");
 const workerConfig = read("worker/internal/config/config.go");
 
@@ -62,10 +64,10 @@ describe("AI quota ordering", () => {
     // runs must show up here, otherwise the ordering check above is decorative.
     const reserving = aiFiles.filter((file) => file.text.includes("reserveUsage(")).map((file) => file.path);
     expect(reserving.sort()).toEqual([
-      "api/ai/analyze.ts",
-      "api/ai/chat.ts",
-      "api/ai/list-analysis.ts",
-      "api/ai/plan.ts",
+      "api/_routes/ai/analyze.ts",
+      "api/_routes/ai/chat.ts",
+      "api/_routes/ai/list-analysis.ts",
+      "api/_routes/ai/plan.ts",
     ]);
   });
 });
@@ -122,5 +124,15 @@ describe("job type contract", () => {
     // here so that adding or removing an enqueuer is a deliberate act.
     const workerOnly = workerDefaults.filter((type) => !enqueuedByApi.includes(type)).sort();
     expect(workerOnly).toEqual(["ai_lead_analysis", "cleanup", "notification"]);
+  });
+});
+
+describe("Vercel Hobby plan limit", () => {
+  it("keeps serverless functions under the 12 functions limit", () => {
+    // Vercel Hobby plan rejects deployments with > 12 serverless functions during patchBuild.
+    // Subdirectories starting with _ (like _lib and _routes) are ignored by Vercel's
+    // function scanner.
+    const functions = tsFiles("api").filter((f) => !f.path.startsWith("api/_"));
+    expect(functions.length).toBeLessThanOrEqual(12);
   });
 });
