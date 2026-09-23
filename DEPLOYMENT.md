@@ -217,8 +217,7 @@ Nothing is simulated.
 1. **New Project → Deploy from GitHub repo**, and point Railway at this
    repository. `railway.toml` (committed) already sets:
    `builder = DOCKERFILE`, `dockerfilePath = worker/Dockerfile`,
-   `startCommand = /usr/local/bin/zybble-worker`, `healthcheckPath = /health`,
-   `healthcheckTimeout = 120`, `numReplicas = 1`,
+   `healthcheckPath = /health`, `healthcheckTimeout = 120`, `numReplicas = 1`,
    `restartPolicyType = ON_FAILURE`.
 2. **Variables** — the worker's set from `.env.example`:
 

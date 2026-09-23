@@ -48,7 +48,13 @@ func main() {
 func healthCheck() int {
 	address := os.Getenv("HEALTH_ADDR")
 	if address == "" {
-		address = ":8080"
+		if port := os.Getenv("PORT"); port != "" {
+			address = ":" + strings.TrimPrefix(port, ":")
+		} else if portAddr := os.Getenv("PORT_ADDR"); portAddr != "" {
+			address = portAddr
+		} else {
+			address = ":8080"
+		}
 	}
 	if strings.HasPrefix(address, ":") {
 		address = "127.0.0.1" + address
@@ -78,35 +84,8 @@ func run() error {
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st, err := store.Open(rootCtx, cfg.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-
-	logger.Info("worker starting",
-		"worker_id", cfg.WorkerID,
-		"version", cfg.Version,
-		"job_types", cfg.JobTypes,
-		"concurrency", cfg.Concurrency,
-		"fast_mode", cfg.FastMode,
-		"email_extraction", cfg.EmailExtraction,
-	)
-
-	registration := map[string]any{
-		"job_types":     cfg.JobTypes,
-		"concurrency":   cfg.Concurrency,
-		"max_scrapes":   cfg.MaxConcurrentScrapeJobs,
-		"fast_mode":     cfg.FastMode,
-		"email":         cfg.EmailExtraction,
-		"browsers":      cfg.BrowserPoolSize,
-		"page_limit":    cfg.MaxPagesPerBrowser,
-	}
-	if err := st.RegisterWorker(rootCtx, cfg.WorkerID, cfg.Version, "gosom-1.18.1", registration); err != nil {
-		return err
-	}
-
-	healthServer := health.New(st, cfg.WorkerID, cfg.Version)
+	// Start health server immediately so Railway's deploy healthcheck succeeds on attempt #1.
+	healthServer := health.New(nil, cfg.WorkerID, cfg.Version)
 	httpServer := newHTTPServer(cfg.HealthAddr, healthServer.Handler())
 
 	go func() {
@@ -116,6 +95,73 @@ func run() error {
 			stop()
 		}
 	}()
+
+	if cfg.DatabaseURL == "" {
+		logger.Warn("DATABASE_URL is not set — worker is idling waiting for database configuration",
+			"worker_id", cfg.WorkerID,
+		)
+		<-rootCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = httpServer.Shutdown(shutdownCtx)
+		cancel()
+		return nil
+	}
+
+	logger.Info("connecting to database", "worker_id", cfg.WorkerID)
+	var st *store.Store
+	for {
+		connectCtx, cancel := context.WithTimeout(rootCtx, 15*time.Second)
+		s, err := store.Open(connectCtx, cfg.DatabaseURL)
+		cancel()
+		if err == nil {
+			st = s
+			healthServer.SetStore(st)
+			break
+		}
+		logger.Warn("database connection failed, retrying in 3s", "error", err)
+		if !sleep(rootCtx, 3*time.Second) {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = httpServer.Shutdown(shutdownCtx)
+			cancel()
+			return nil
+		}
+	}
+	defer st.Close()
+
+	logger.Info("worker connected",
+		"worker_id", cfg.WorkerID,
+		"version", cfg.Version,
+		"job_types", cfg.JobTypes,
+		"concurrency", cfg.Concurrency,
+		"fast_mode", cfg.FastMode,
+		"email_extraction", cfg.EmailExtraction,
+	)
+
+	registration := map[string]any{
+		"job_types":   cfg.JobTypes,
+		"concurrency": cfg.Concurrency,
+		"max_scrapes": cfg.MaxConcurrentScrapeJobs,
+		"fast_mode":   cfg.FastMode,
+		"email":       cfg.EmailExtraction,
+		"browsers":    cfg.BrowserPoolSize,
+		"page_limit":  cfg.MaxPagesPerBrowser,
+	}
+
+	for {
+		regCtx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+		err := st.RegisterWorker(regCtx, cfg.WorkerID, cfg.Version, "gosom-1.18.1", registration)
+		cancel()
+		if err == nil {
+			break
+		}
+		logger.Warn("worker registration failed, retrying in 3s", "error", err)
+		if !sleep(rootCtx, 3*time.Second) {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = httpServer.Shutdown(shutdownCtx)
+			cancel()
+			return nil
+		}
+	}
 
 	// Anything left running by a dead worker belongs to us now.
 	if reclaimed, failedJobs, err := st.ReclaimExpired(rootCtx, 500); err != nil {

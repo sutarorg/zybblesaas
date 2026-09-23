@@ -89,6 +89,6 @@ USER zybble
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["zybble-worker", "--health-check"]
+  CMD ["/usr/local/bin/zybble-worker", "--health-check"]
 
-ENTRYPOINT ["zybble-worker"]
+ENTRYPOINT ["/usr/local/bin/zybble-worker"]

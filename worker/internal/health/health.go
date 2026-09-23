@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,7 +17,8 @@ import (
 )
 
 type Server struct {
-	Store   *store.Store
+	mu      sync.RWMutex
+	store   *store.Store
 	Version string
 	Worker  string
 
@@ -28,7 +30,19 @@ type Server struct {
 }
 
 func New(st *store.Store, workerID, version string) *Server {
-	return &Server{Store: st, Version: version, Worker: workerID, startedAt: time.Now()}
+	return &Server{store: st, Version: version, Worker: workerID, startedAt: time.Now()}
+}
+
+func (s *Server) SetStore(st *store.Store) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store = st
+}
+
+func (s *Server) getStore() *store.Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.store
 }
 
 func (s *Server) Processed() int64 { return s.processed.Load() }
@@ -76,13 +90,14 @@ func (s *Server) handleHealth(response http.ResponseWriter, request *http.Reques
 		"checked_at": time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if err := s.Store.Ping(ctx); err != nil {
-		payload["ok"] = false
-		payload["database"] = err.Error()
-		writeJSON(response, http.StatusServiceUnavailable, payload)
-		return
+	st := s.getStore()
+	if st == nil {
+		payload["database"] = "connecting"
+	} else if err := st.Ping(ctx); err != nil {
+		payload["database"] = "unreachable: " + err.Error()
+	} else {
+		payload["database"] = "ok"
 	}
-	payload["database"] = "ok"
 
 	writeJSON(response, http.StatusOK, payload)
 }
@@ -93,7 +108,15 @@ func (s *Server) handleReady(response http.ResponseWriter, request *http.Request
 
 	payload := map[string]any{"ok": true, "version": s.Version}
 
-	if err := s.Store.Ping(ctx); err != nil {
+	st := s.getStore()
+	if st == nil {
+		payload["ok"] = false
+		payload["database"] = "connecting"
+		writeJSON(response, http.StatusServiceUnavailable, payload)
+		return
+	}
+
+	if err := st.Ping(ctx); err != nil {
 		payload["ok"] = false
 		payload["database"] = err.Error()
 		writeJSON(response, http.StatusServiceUnavailable, payload)
@@ -101,7 +124,7 @@ func (s *Server) handleReady(response http.ResponseWriter, request *http.Request
 	}
 	payload["database"] = "ok"
 
-	if stats, err := s.Store.QueueStats(ctx); err == nil {
+	if stats, err := st.QueueStats(ctx); err == nil {
 		payload["queue"] = stats
 	}
 
@@ -112,14 +135,17 @@ func (s *Server) handleMetrics(response http.ResponseWriter, request *http.Reque
 	ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
 	defer cancel()
 
-	queue, _ := s.Store.QueueStats(ctx)
+	var queue map[string]any
+	if st := s.getStore(); st != nil {
+		queue, _ = st.QueueStats(ctx)
+	}
 	payload := map[string]any{
-		"worker":           s.Worker,
-		"processed":        s.processed.Load(),
-		"failed":           s.failed.Load(),
-		"active":           s.active.Load(),
-		"queue":            queue,
-		"uptime_seconds":   int(time.Since(s.startedAt).Seconds()),
+		"worker":         s.Worker,
+		"processed":      s.processed.Load(),
+		"failed":         s.failed.Load(),
+		"active":         s.active.Load(),
+		"queue":          queue,
+		"uptime_seconds": int(time.Since(s.startedAt).Seconds()),
 	}
 
 	writeJSON(response, http.StatusOK, payload)
