@@ -142,10 +142,30 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		if input == nil {
 			return map[string]any{"skipped": true, "reason": "engine pass no longer exists"}, nil
 		}
-		// Redelivery of a job whose pass already finished must do nothing at all:
-		// expensive work has to be idempotent across worker restarts.
+		// Redelivery of a job whose pass already finished must not scrape again:
+		// expensive work has to be idempotent across worker restarts. It must,
+		// however, still reconcile the parent search. A worker can die after the
+		// input row is closed but before FinishSearch runs; returning here without
+		// finalising the parent leaves the UI stuck at queued forever.
 		switch input.Status {
-		case "completed", "skipped", "cancelled":
+		case "completed", "skipped":
+			status, finished, err := w.Store.FinishSearch(ctx, searchID)
+			if err != nil {
+				return nil, err
+			}
+			if finished {
+				// The first attempt may have died after closing the input but
+				// before delivering the completion notification. Replaying the
+				// queue job is safe, so complete the same finalisation path here.
+				w.notifySearchCompletion(ctx, search, status)
+			}
+			return map[string]any{
+				"skipped":  true,
+				"reason":   "engine pass already finished; parent search reconciled",
+				"status":   status,
+				"finished": finished,
+			}, nil
+		case "cancelled":
 			return map[string]any{"skipped": true, "reason": "engine pass already finished", "status": input.Status}, nil
 		}
 		inputs = []store.Input{*input}
@@ -159,6 +179,9 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		status, finished, err := w.Store.FinishSearch(ctx, searchID)
 		if err != nil {
 			return nil, err
+		}
+		if finished {
+			w.notifySearchCompletion(ctx, search, status)
 		}
 		return map[string]any{"skipped": true, "reason": "nothing left to scrape", "status": status, "finished": finished}, nil
 	}
@@ -315,9 +338,34 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		}, nil
 	}
 
-	summary, err := w.Store.SearchSummary(ctx, searchID)
+	w.notifySearchCompletion(ctx, search, status)
+
+	return map[string]any{
+		"status":             status,
+		"finished":           true,
+		"inputs_completed":   completed,
+		"inputs_failed":      failed,
+		"entries_persisted":  result.Entries,
+		"places_not_stored":  result.WriteFailures,
+		"finished_naturally": result.FinishedNaturally,
+		"worker":             w.Config.WorkerID,
+	}, nil
+}
+
+// notifySearchCompletion is intentionally best-effort. Search status is the
+// source of truth; an email/provider problem must never turn a completed scrape
+// back into a retrying scrape job.
+func (w *Worker) notifySearchCompletion(ctx context.Context, search *store.Search, status string) {
+	if search == nil {
+		return
+	}
+	summary, err := w.Store.SearchSummary(ctx, search.ID)
 	if err != nil {
-		return nil, err
+		w.Log.Warn("could not build search completion notification", "search", search.ID, "error", err)
+		return
+	}
+	if summary == nil {
+		return
 	}
 
 	notificationType := "search_completed"
@@ -332,23 +380,12 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		title = fmt.Sprintf("%s could not be completed", search.Name)
 	}
 
-	if summary != nil {
-		body := fmt.Sprintf("%v unique leads (%v found, %v skipped as duplicates)",
-			summary["unique"], summary["discovered"], summary["duplicates"])
-		_ = w.Store.Notify(ctx, search.WorkspaceID, notificationType, title, body, "/search/"+search.Slug, severity,
-			map[string]any{"search_id": search.ID, "slug": search.Slug, "status": status})
+	body := fmt.Sprintf("%v unique leads (%v found, %v skipped as duplicates)",
+		summary["unique"], summary["discovered"], summary["duplicates"])
+	if err := w.Store.Notify(ctx, search.WorkspaceID, notificationType, title, body, "/search/"+search.Slug, severity,
+		map[string]any{"search_id": search.ID, "slug": search.Slug, "status": status}); err != nil {
+		w.Log.Warn("could not send search completion notification", "search", search.ID, "error", err)
 	}
-
-	return map[string]any{
-		"status":             status,
-		"finished":           true,
-		"inputs_completed":   completed,
-		"inputs_failed":      failed,
-		"entries_persisted":  result.Entries,
-		"places_not_stored":  result.WriteFailures,
-		"finished_naturally": result.FinishedNaturally,
-		"worker":             w.Config.WorkerID,
-	}, nil
 }
 
 // progressLoop renews the job lease and publishes progress at a human pace.
@@ -961,6 +998,31 @@ func (w *Worker) cleanup(ctx context.Context, _ store.Job) (map[string]any, erro
 		return nil, err
 	}
 
+	// Repair parent searches left active by a crash after their final input was
+	// marked terminal. This is deliberately run before stale-job recovery so a
+	// completed pass is never scraped a second time just to update its parent.
+	closedInputs, err := w.Store.SearchesWithClosedInputs(ctx, 100)
+	if err != nil {
+		return nil, err
+	}
+	reconciled := 0
+	for _, searchID := range closedInputs {
+		search, loadErr := w.Store.LoadSearch(ctx, searchID)
+		if loadErr != nil {
+			w.Log.Warn("could not load search for reconciliation", "search", searchID, "error", loadErr)
+			continue
+		}
+		status, finished, finishErr := w.Store.FinishSearch(ctx, searchID)
+		if finishErr != nil {
+			w.Log.Warn("could not reconcile completed search", "search", searchID, "error", finishErr)
+			continue
+		}
+		if finished {
+			w.notifySearchCompletion(ctx, search, status)
+		}
+		reconciled++
+	}
+
 	stale, err := w.Store.RequeueStaleSearches(ctx, 30)
 	if err != nil {
 		return nil, err
@@ -1012,6 +1074,7 @@ func (w *Worker) cleanup(ctx context.Context, _ store.Job) (map[string]any, erro
 	return map[string]any{
 		"jobs_reclaimed":        reclaimed,
 		"jobs_failed":           failedJobs,
+		"searches_reconciled":   reconciled,
 		"searches_requeued":     requeued,
 		"exports_expired":       expired,
 		"export_objects_removed": deleted,

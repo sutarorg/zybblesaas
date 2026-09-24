@@ -647,6 +647,43 @@ func (s *Store) FailExport(ctx context.Context, exportID, message string) error 
 
 // ---------------------------------------------------------------- maintenance
 
+// SearchesWithClosedInputs finds active searches whose every engine pass is
+// already terminal. This is the repair path for a worker that died between
+// closing the last input and updating the parent search row. It intentionally
+// excludes paused searches: pausing is a user choice, not a stale state.
+func (s *Store) SearchesWithClosedInputs(ctx context.Context, limit int) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		select s.id::text
+		  from public.searches s
+		 where s.status in ('queued', 'running', 'enriching')
+		   and s.deleted_at is null
+		   and exists (
+			   select 1 from public.search_inputs i
+			    where i.search_id = s.id
+		   )
+		   and not exists (
+			   select 1 from public.search_inputs i
+			    where i.search_id = s.id
+			      and i.status in ('pending', 'running')
+		   )
+		 order by s.updated_at asc
+		 limit greatest(1, $1)`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // RequeueStaleSearches finds searches whose jobs vanished (worker died before
 // finishing) and asks for a fresh scrape job. This is the recovery path that
 // keeps "expensive jobs survive restarts" true.

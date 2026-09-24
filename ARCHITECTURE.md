@@ -209,7 +209,9 @@ Functions: `ops.queue_enqueue`, `queue_claim` (SKIP LOCKED + `FOR UPDATE`),
 - A `scrape` job carries `search_id` **and** `input_id`. The worker loads exactly
   that engine pass and refuses to run it again if it is already
   `completed | skipped | cancelled` — a redelivered job after a restart is a
-  no-op, not a re-scrape.
+  no-op, not a re-scrape. For a completed/skipped pass it still reconciles the
+  parent search, so a crash between closing the input and finalising the search
+  cannot leave the UI showing `queued` forever.
 - Recovery jobs (`cleanup` → `scrape` with `{search_id, reason}` and no
   `input_id`) mean "pick up whatever is still open for this search".
 - Lead writes go through `public.lead_upsert`, which deduplicates on place
