@@ -105,7 +105,14 @@ export default route(
       });
     }
 
-    const body = parse(createSchema, ctx.body);
+    // `null` config values (JSON's rendering of NaN from a form) mean "not
+    // set" — fall back to defaults instead of rejecting the whole search.
+    const rawConfig = ctx.body.config;
+    const input =
+      rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig)
+        ? { ...ctx.body, config: Object.fromEntries(Object.entries(rawConfig as Record<string, unknown>).filter(([, value]) => value !== null)) }
+        : ctx.body;
+    const body = parse(createSchema, input);
     const config = searchConfigSchema.parse({ ...(body.config ?? {}), language: body.config?.language ?? undefined });
 
     const ent = await entitlements(workspaceId);

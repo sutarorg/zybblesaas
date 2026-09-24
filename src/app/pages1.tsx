@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -329,9 +329,19 @@ export function FindLeadsPage() {
   // server reject a launch the UI could have prevented.
   const maxDepth = plan?.max_search_depth ?? 10;
   const maxRadius = plan?.max_radius_km ?? 10;
+  // Every option carries an explicit numeric `value` — without it the browser
+  // reports the label ("8 levels"), which parsed to NaN and was sent as `null`,
+  // so the API rejected the search with "Some fields are invalid".
+  const depthOptions = useMemo(() => {
+    const options = [4, 8, 10, 12, 16, 20].filter((d) => d <= maxDepth);
+    if (!options.includes(maxDepth) && maxDepth >= 1) options.push(maxDepth);
+    return options.sort((a, b) => a - b);
+  }, [maxDepth]);
   useEffect(() => {
-    if (depth > maxDepth) setDepth(maxDepth);
-  }, [depth, maxDepth]);
+    if (!Number.isFinite(depth) || depth < 1) setDepth(Math.min(10, maxDepth));
+    else if (depth > maxDepth) setDepth(maxDepth);
+    else if (!depthOptions.includes(depth)) setDepth(depthOptions.filter((d) => d <= depth).pop() ?? depthOptions[0] ?? maxDepth);
+  }, [depth, depthOptions, maxDepth]);
   useEffect(() => {
     if (radius > maxRadius) setRadius(maxRadius);
   }, [radius, maxRadius]);
@@ -340,13 +350,19 @@ export function FindLeadsPage() {
     if (!niche.trim() || !city.trim()) return;
     setBusy(true);
     setProblem(null);
+    const safeDepth = Number.isFinite(depth) ? Math.min(Math.max(1, Math.round(depth)), maxDepth) : Math.min(10, maxDepth);
+    const safeRadius = Number.isFinite(radius) ? Math.min(Math.max(1, radius), maxRadius) : Math.min(10, maxRadius);
     try {
       const job = await createJob({
         query: q,
         city: city.trim(),
         planned: requested,
         source: "manual",
-        flags: { email, fastMode, depth, radius, lang },
+        flags: { email, fastMode, depth: safeDepth, radius: safeRadius, lang },
+        filters: {
+          ...(minRating !== "any" ? { minRating: Number(minRating) } : {}),
+          ...(minReviews !== "any" ? { minReviews: Number(minReviews) } : {}),
+        },
       });
       window.location.hash = `#/search/${job.slug}`;
     } catch (cause) {
@@ -451,9 +467,11 @@ export function FindLeadsPage() {
               <div>
                 <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Depth</label>
                 <div className="relative">
-                  <select value={depth} onChange={(e) => setDepth(+e.target.value)} className={selectCls}>
-                    {[4, 8, 10, 12, 16, 20].filter((d) => d <= Math.max(maxDepth, 4)).map((d) => (
-                      <option key={d} className="bg-coal">{d} levels</option>
+                  <select value={String(depth)} onChange={(e) => setDepth(Number(e.target.value))} className={selectCls}>
+                    {depthOptions.map((d) => (
+                      <option key={d} value={String(d)} className="bg-coal">
+                        {d} levels
+                      </option>
                     ))}
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
@@ -464,7 +482,7 @@ export function FindLeadsPage() {
                 <div className="relative">
                   <select value={lang} onChange={(e) => setLang(e.target.value)} className={selectCls}>
                     {["en", "de", "fr", "pt", "es", "nl"].map((l) => (
-                      <option key={l} className="bg-coal">{l}</option>
+                      <option key={l} value={l} className="bg-coal">{l}</option>
                     ))}
                   </select>
                   <Languages className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-faint" />
@@ -503,7 +521,7 @@ export function FindLeadsPage() {
                     <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Min rating</label>
                     <select value={minRating} onChange={(e) => setMinRating(e.target.value)} className={selectCls}>
                       {["any", "4.0", "4.2", "4.5", "4.8"].map((r) => (
-                        <option key={r} className="bg-coal">{r === "any" ? "any rating" : `≥ ${r} stars`}</option>
+                        <option key={r} value={r} className="bg-coal">{r === "any" ? "any rating" : `≥ ${r} stars`}</option>
                       ))}
                     </select>
                   </div>
@@ -511,7 +529,7 @@ export function FindLeadsPage() {
                     <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.16em] text-faint">Min reviews</label>
                     <select value={minReviews} onChange={(e) => setMinReviews(e.target.value)} className={selectCls}>
                       {["any", "10", "25", "50", "100"].map((r) => (
-                        <option key={r} className="bg-coal">{r === "any" ? "any count" : `≥ ${r} reviews`}</option>
+                        <option key={r} value={r} className="bg-coal">{r === "any" ? "any count" : `≥ ${r} reviews`}</option>
                       ))}
                     </select>
                   </div>
