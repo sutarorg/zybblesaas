@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { ApiError } from "./errors";
-import type { RouteContext } from "./http";
+import { ApiError } from "./errors.js";
+import type { RouteContext } from "./http.js";
 
 /**
  * Thin zod helpers. Every request body that reaches business logic has already

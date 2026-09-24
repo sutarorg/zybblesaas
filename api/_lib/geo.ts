@@ -1,5 +1,5 @@
-import { admin, query } from "./supabase";
-import { badRequest, notFound } from "./errors";
+import { admin, query } from "./supabase.js";
+import { badRequest, notFound } from "./errors.js";
 
 /**
  * Location resolution.

@@ -1,7 +1,7 @@
-import { route, ok } from "../_lib/http";
-import { rpc } from "../_lib/supabase";
-import { admin, query } from "../_lib/supabase";
-import { features } from "../_lib/env";
+import { route, ok } from "../_lib/http.js";
+import { rpc } from "../_lib/supabase.js";
+import { admin, query } from "../_lib/supabase.js";
+import { features } from "../_lib/env.js";
 
 export const WORKER_VERSION = "1.0.0";
 

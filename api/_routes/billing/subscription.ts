@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { razorpay } from "../../_lib/razorpay";
-import { planByCode, publicPlan } from "../../_lib/plans";
-import { audit } from "../../_lib/audit";
-import { conflict, planRequired } from "../../_lib/errors";
-import { toInvoice } from "../../_lib/serialize";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { razorpay } from "../../_lib/razorpay.js";
+import { planByCode, publicPlan } from "../../_lib/plans.js";
+import { audit } from "../../_lib/audit.js";
+import { conflict, planRequired } from "../../_lib/errors.js";
+import { toInvoice } from "../../_lib/serialize.js";
 
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel"), atCycleEnd: z.boolean().default(true), reason: z.string().max(300).optional() }),

@@ -1,5 +1,5 @@
-import { route, ok } from "../_lib/http";
-import { features, env } from "../_lib/env";
+import { route, ok } from "../_lib/http.js";
+import { features, env } from "../_lib/env.js";
 
 /**
  * Public runtime configuration for the browser bundle. Only values that are

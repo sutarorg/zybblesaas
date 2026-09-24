@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { env } from "./env";
-import { notConfigured, providerError, badRequest } from "./errors";
+import { env } from "./env.js";
+import { notConfigured, providerError, badRequest } from "./errors.js";
 
 /**
  * Razorpay REST client (subscriptions / plans / invoices) plus signature

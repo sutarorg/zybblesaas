@@ -1,6 +1,6 @@
-import { route, ok } from "../../_lib/http";
-import { listPlans, publicPlan } from "../../_lib/plans";
-import { features, env } from "../../_lib/env";
+import { route, ok } from "../../_lib/http.js";
+import { listPlans, publicPlan } from "../../_lib/plans.js";
+import { features, env } from "../../_lib/env.js";
 
 /**
  * Plan catalogue for the pricing page and /billing.

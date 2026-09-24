@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements, recordUsage } from "../../_lib/entitlements";
-import { uniqueSlug } from "../../_lib/slugs";
-import { enqueue } from "../../_lib/queue";
-import { audit } from "../../_lib/audit";
-import { badRequest, planRequired } from "../../_lib/errors";
-import { toExport } from "../../_lib/serialize";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements, recordUsage } from "../../_lib/entitlements.js";
+import { uniqueSlug } from "../../_lib/slugs.js";
+import { enqueue } from "../../_lib/queue.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, planRequired } from "../../_lib/errors.js";
+import { toExport } from "../../_lib/serialize.js";
 
 type ExportRow = Parameters<typeof toExport>[0];
 

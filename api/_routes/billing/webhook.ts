@@ -1,8 +1,8 @@
-import { route, ok } from "../../_lib/http";
-import { readRawBody } from "../../_lib/http";
-import { admin, query, rpc } from "../../_lib/supabase";
-import { verifyWebhookSignature } from "../../_lib/razorpay";
-import { badRequest } from "../../_lib/errors";
+import { route, ok } from "../../_lib/http.js";
+import { readRawBody } from "../../_lib/http.js";
+import { admin, query, rpc } from "../../_lib/supabase.js";
+import { verifyWebhookSignature } from "../../_lib/razorpay.js";
+import { badRequest } from "../../_lib/errors.js";
 
 /**
  * Razorpay webhook receiver.

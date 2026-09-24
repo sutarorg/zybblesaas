@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { audit } from "../../_lib/audit";
-import { conflict, notFound } from "../../_lib/errors";
-import { generateApiKey } from "./index";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { audit } from "../../_lib/audit.js";
+import { conflict, notFound } from "../../_lib/errors.js";
+import { generateApiKey } from "./index.js";
 
 const patchSchema = z.object({ name: z.string().min(1).max(80).optional(), revoke: z.boolean().optional() });
 

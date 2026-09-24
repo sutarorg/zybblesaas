@@ -1,8 +1,8 @@
-import { route, ok } from "../../_lib/http";
-import { admin, query } from "../../_lib/supabase";
-import { audit } from "../../_lib/audit";
-import { badRequest, conflict, notFound } from "../../_lib/errors";
-import { toExport } from "../../_lib/serialize";
+import { route, ok } from "../../_lib/http.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, conflict, notFound } from "../../_lib/errors.js";
+import { toExport } from "../../_lib/serialize.js";
 
 type ExportRow = Parameters<typeof toExport>[0];
 

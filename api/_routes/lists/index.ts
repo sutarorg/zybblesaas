@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { uniqueSlug } from "../../_lib/slugs";
-import { audit } from "../../_lib/audit";
-import { badRequest, conflict } from "../../_lib/errors";
-import { toList } from "../../_lib/serialize";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { uniqueSlug } from "../../_lib/slugs.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, conflict } from "../../_lib/errors.js";
+import { toList } from "../../_lib/serialize.js";
 
 type ListRow = Parameters<typeof toList>[0];
 

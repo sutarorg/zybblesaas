@@ -1,4 +1,4 @@
-import { rpc } from "./supabase";
+import { rpc } from "./supabase.js";
 
 export type JobType =
   | "scrape"

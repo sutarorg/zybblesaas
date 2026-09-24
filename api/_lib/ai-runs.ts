@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { admin, query } from "./supabase";
-import type { Entitlements } from "./entitlements";
+import { admin, query } from "./supabase.js";
+import type { Entitlements } from "./entitlements.js";
 
 /** Values allowed by ai_runs_task_check (migration 0005). */
 export type AiTask = "SEARCH_PLAN" | "LEAD_ANALYSIS" | "LEAD_SCORING" | "LIST_ANALYSIS" | "AI_CHAT";

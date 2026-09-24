@@ -1,4 +1,4 @@
-import { rpc } from "./supabase";
+import { rpc } from "./supabase.js";
 
 export type SlugTable = "searches" | "leads" | "lists" | "exports" | "ai_conversations" | "workspaces";
 

@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { audit } from "../../_lib/audit";
-import { badRequest } from "../../_lib/errors";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest } from "../../_lib/errors.js";
 
 const patchSchema = z
   .object({

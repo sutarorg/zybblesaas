@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse, searchConfigSchema } from "../../_lib/validate";
-import { admin, query, rpc } from "../../_lib/supabase";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse, searchConfigSchema } from "../../_lib/validate.js";
+import { admin, query, rpc } from "../../_lib/supabase.js";
 import {
   assertConcurrency,
   assertGridCoverage,
@@ -9,13 +9,13 @@ import {
   entitlements,
   queuePriority,
   recordUsage,
-} from "../../_lib/entitlements";
-import { findPlace, gridCells, zoomForRadius } from "../../_lib/geo";
-import { uniqueSlug } from "../../_lib/slugs";
-import { enqueue } from "../../_lib/queue";
-import { audit } from "../../_lib/audit";
-import { badRequest, quotaExceeded } from "../../_lib/errors";
-import { toJob, type EventRow, type SearchRow } from "../../_lib/serialize";
+} from "../../_lib/entitlements.js";
+import { findPlace, gridCells, zoomForRadius } from "../../_lib/geo.js";
+import { uniqueSlug } from "../../_lib/slugs.js";
+import { enqueue } from "../../_lib/queue.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, quotaExceeded } from "../../_lib/errors.js";
+import { toJob, type EventRow, type SearchRow } from "../../_lib/serialize.js";
 
 /** Gosom caps a single query at roughly 120 unique places. */
 const RESULTS_PER_INPUT = 120;

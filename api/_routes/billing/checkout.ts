@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { route, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { ensureRazorpayPlan, planByCode } from "../../_lib/plans";
-import { razorpay } from "../../_lib/razorpay";
-import { env } from "../../_lib/env";
-import { audit } from "../../_lib/audit";
-import { conflict, planRequired } from "../../_lib/errors";
+import { route, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { ensureRazorpayPlan, planByCode } from "../../_lib/plans.js";
+import { razorpay } from "../../_lib/razorpay.js";
+import { env } from "../../_lib/env.js";
+import { audit } from "../../_lib/audit.js";
+import { conflict, planRequired } from "../../_lib/errors.js";
 
 const bodySchema = z.object({ planCode: z.enum(["growth", "scale"]), quantity: z.number().int().min(1).max(50).default(1) });
 

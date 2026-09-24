@@ -1,8 +1,8 @@
-import { route, ok } from "../_lib/http";
-import { admin, query } from "../_lib/supabase";
-import { entitlements } from "../_lib/entitlements";
-import { planByCode, publicPlan } from "../_lib/plans";
-import { features } from "../_lib/env";
+import { route, ok } from "../_lib/http.js";
+import { admin, query } from "../_lib/supabase.js";
+import { entitlements } from "../_lib/entitlements.js";
+import { planByCode, publicPlan } from "../_lib/plans.js";
+import { features } from "../_lib/env.js";
 
 /**
  * Session bootstrap: one call the SPA makes after sign-in.

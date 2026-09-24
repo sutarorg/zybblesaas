@@ -1,7 +1,7 @@
-import { admin, query } from "./supabase";
-import { env } from "./env";
-import { notFound, planRequired } from "./errors";
-import { razorpay } from "./razorpay";
+import { admin, query } from "./supabase.js";
+import { env } from "./env.js";
+import { notFound, planRequired } from "./errors.js";
+import { razorpay } from "./razorpay.js";
 
 export type PlanRow = {
   id: string;

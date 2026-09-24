@@ -1,6 +1,6 @@
-import { route, ok } from "../_lib/http";
-import { admin, query, rpc } from "../_lib/supabase";
-import { entitlements } from "../_lib/entitlements";
+import { route, ok } from "../_lib/http.js";
+import { admin, query, rpc } from "../_lib/supabase.js";
+import { entitlements } from "../_lib/entitlements.js";
 
 type Dashboard = {
   period: { start: string; end: string };
