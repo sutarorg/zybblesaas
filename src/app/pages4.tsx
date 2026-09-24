@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, type ExportPayload, type Job } from "../lib/api";
 import { useEngine } from "./engine";
+import { useSession } from "./session";
 import { useExports, useLists } from "./hooks";
 import { downloadUrl, relTime } from "./data";
 import { useTheme } from "../lib/theme";
@@ -52,8 +53,52 @@ type Msg =
       running: boolean;
       error?: string;
     }
-  | { id: number; role: "ai"; kind: "chat"; text: string }
+  | { id: number; role: "ai"; kind: "chat"; text: string; upgrade?: boolean }
   | { id: number; role: "ai"; kind: "diary"; searchSlugs: string[] };
+
+/**
+ * The planner response crosses a network boundary: never trust its shape.
+ * A malformed plan used to be rendered as-is and crashed the whole page
+ * (blank white screen). Anything unusable returns null instead.
+ */
+function toPlan(raw: unknown): Plan | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  const queries = Array.isArray(value.queries)
+    ? value.queries
+        .filter((query): query is Record<string, unknown> => Boolean(query) && typeof query === "object")
+        .map((query) => ({
+          text: String(query.text ?? "").trim(),
+          location: typeof query.location === "string" && query.location.trim() ? query.location.trim() : undefined,
+          rationale: String(query.rationale ?? ""),
+        }))
+        .filter((query) => query.text.length > 1)
+    : [];
+  if (queries.length === 0) return null;
+  const rec = (value.recommended && typeof value.recommended === "object" ? value.recommended : {}) as Record<string, unknown>;
+  const num = (input: unknown, fallback: number) => (Number.isFinite(Number(input)) && input !== null && input !== "" ? Number(input) : fallback);
+  const requestedCount = Math.round(num(rec.requestedCount, 250));
+  const preview = (value.preview && typeof value.preview === "object" ? value.preview : {}) as Record<string, unknown>;
+  const inputs = Math.max(1, Math.round(num(preview.inputs, Math.ceil(requestedCount / 120))));
+  return {
+    summary: typeof value.summary === "string" ? value.summary : "",
+    segments: Array.isArray(value.segments)
+      ? value.segments
+          .filter((segment): segment is Record<string, unknown> => Boolean(segment) && typeof segment === "object")
+          .map((segment) => ({ name: String(segment.name ?? ""), why: String(segment.why ?? "") }))
+      : [],
+    queries,
+    recommended: {
+      depth: Math.round(num(rec.depth, 10)),
+      radiusKm: num(rec.radiusKm, 10),
+      requestedCount,
+      emailExtraction: rec.emailExtraction === undefined ? true : Boolean(rec.emailExtraction),
+      grid: Boolean(rec.grid),
+    },
+    nextSteps: Array.isArray(value.nextSteps) ? value.nextSteps.map((step) => String(step)) : [],
+    preview: { inputs, ceiling: num(preview.ceiling, inputs * 120), resultsPerInput: num(preview.resultsPerInput, 120) },
+  };
+}
 
 let messageIds = 1;
 const nextId = () => messageIds++;
@@ -68,6 +113,14 @@ const SUGGESTIONS = [
 export function ZybbleAiPage() {
   const { theme } = useTheme();
   const { createJob, jobs, refresh } = useEngine();
+  const { me } = useSession();
+  const planInfo = me?.entitlements?.plan;
+  // Free (Starter) workspaces do not include the AI planner. Answer locally
+  // with an upgrade path instead of round-tripping to a 402.
+  const aiLocked = Boolean(me) && (planInfo?.ai_enabled === false || me?.capabilities?.ai === false);
+  const planName = planInfo?.name ?? me?.plan?.name ?? "current";
+  const maxDepth = planInfo?.max_search_depth;
+  const maxRadius = planInfo?.max_radius_km;
   const [msgs, setMsgs] = useState<Msg[]>([{ id: 0, role: "ai", kind: "welcome" }]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -93,16 +146,31 @@ export function ZybbleAiPage() {
     setBusy(true);
     setProblem(null);
     setMsgs((current) => [...current, { id: nextId(), role: "user", text }]);
-    try {
-      const response = await api.ai.plan({ brief: text, targetCount: 250 });
+    if (aiLocked) {
+      setBusy(false);
       setMsgs((current) => [
         ...current,
-        { id: nextId(), role: "ai", kind: "plan", brief: text, plan: response.plan as unknown as Plan, approved: false, searches: [], running: false },
+        {
+          id: nextId(),
+          role: "ai",
+          kind: "chat",
+          upgrade: true,
+          text: `Zybble AI planning isn't included in the ${planName} plan. Upgrade to Growth or Scale to plan searches from a brief — or run this search yourself from Find leads, which works on every plan.`,
+        },
       ]);
+      return;
+    }
+    try {
+      const response = await api.ai.plan({ brief: text, targetCount: 250 });
+      const plan = toPlan(response?.plan);
+      if (!plan) throw new Error("The planner returned an unusable plan — try rephrasing your brief");
+      setMsgs((current) => [...current, { id: nextId(), role: "ai", kind: "plan", brief: text, plan, approved: false, searches: [], running: false }]);
     } catch (cause) {
-      const message = cause instanceof ApiError ? cause.message : "The planner is unavailable right now";
-      setProblem(message);
-      setMsgs((current) => [...current, { id: nextId(), role: "ai", kind: "chat", text: `I could not plan that search: ${message}` }]);
+      const planError = cause instanceof ApiError && cause.isPlanError;
+      const message =
+        cause instanceof ApiError ? cause.message : cause instanceof Error && cause.message ? cause.message : "The planner is unavailable right now";
+      if (!planError) setProblem(message);
+      setMsgs((current) => [...current, { id: nextId(), role: "ai", kind: "chat", upgrade: planError, text: `I could not plan that search: ${message}` }]);
     } finally {
       setBusy(false);
     }
@@ -126,8 +194,8 @@ export function ZybbleAiPage() {
           name: query.text,
           flags: {
             email: plan.recommended.emailExtraction,
-            depth: plan.recommended.depth,
-            radius: Math.max(1, Math.round(plan.recommended.radiusKm)),
+            depth: maxDepth ? Math.min(plan.recommended.depth, maxDepth) : plan.recommended.depth,
+            radius: Math.max(1, Math.min(Math.round(plan.recommended.radiusKm), maxRadius ?? Number.POSITIVE_INFINITY)),
             grid: plan.recommended.grid,
           },
           aiPlan: { ...plan, brief } as unknown as Record<string, unknown>,
@@ -161,6 +229,14 @@ export function ZybbleAiPage() {
         desc="Brief in plain English. Review the plan. Nothing runs — and no quota is spent — until you approve it."
       />
 
+      {aiLocked && (
+        <Card className="mb-4 flex flex-wrap items-center justify-between gap-3 border-amber/40 p-4 text-[13px] text-amber">
+          <span>AI planning is not included in the {planName} plan.</span>
+          <a href="#/billing" className="font-mono text-[11px] text-zest hover:underline">
+            upgrade →
+          </a>
+        </Card>
+      )}
       {problem && <Card className="mb-4 border-amber/40 p-4 text-[13px] text-amber">{problem}</Card>}
 
       <div className="flex-1 space-y-4 pb-6">
@@ -208,6 +284,16 @@ export function ZybbleAiPage() {
                 </span>
                 <div className="max-w-[88%] whitespace-pre-wrap rounded-2xl rounded-bl-md border border-line bg-coal px-4 py-3.5 text-[13.5px] leading-relaxed text-sage">
                   {msg.text}
+                  {msg.upgrade && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <a href="#/billing" className="inline-flex h-9 items-center rounded-lg bg-zest px-3.5 font-display text-[12.5px] font-semibold text-ink">
+                        See plans
+                      </a>
+                      <a href="#/findleads" className="inline-flex h-9 items-center rounded-lg border border-line px-3.5 font-display text-[12.5px] font-medium text-bone">
+                        Use Find leads
+                      </a>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             );

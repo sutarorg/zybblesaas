@@ -10,7 +10,12 @@ import type { RouteContext } from "./http.js";
 export function parse<S extends z.ZodTypeAny>(schema: S, value: unknown): z.infer<S> {
   const result = schema.safeParse(value);
   if (!result.success) {
-    throw new ApiError("bad_request", "Some fields are invalid", flatten(result.error));
+    const details = flatten(result.error);
+    const summary = Object.entries(details)
+      .slice(0, 3)
+      .map(([field, messages]) => (field === "_" ? messages[0] : `${field}: ${messages[0]}`))
+      .join("; ");
+    throw new ApiError("bad_request", summary ? `Some fields are invalid — ${summary}` : "Some fields are invalid", details);
   }
   return result.data;
 }

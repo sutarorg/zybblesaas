@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Bell,
@@ -158,6 +158,38 @@ export function EmptyState({ icon: Icon, title, desc, action }: { icon: typeof R
       {action && <div className="mt-5">{action}</div>}
     </div>
   );
+}
+
+/**
+ * A render error inside one page must never unmount the whole app (which
+ * shows up as a blank white screen). Keyed by route, so navigating away resets it.
+ */
+export class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[page crashed]", error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="grid place-items-center rounded-2xl border border-amber/40 bg-amber/[0.06] px-6 py-14 text-center">
+        <p className="font-display text-lg font-semibold text-bone">This screen hit a problem</p>
+        <p className="mt-2 max-w-md font-mono text-[11.5px] leading-relaxed text-amber">{this.state.error.message || "Unexpected error"}</p>
+        <button
+          onClick={() => this.setState({ error: null })}
+          className="mt-5 inline-flex h-10 items-center rounded-xl bg-zest px-4 font-display text-[13px] font-semibold text-ink"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -392,7 +424,9 @@ export function AppShell({ route, children }: { route: string; children: ReactNo
 
       {/* ---------------- content ---------------- */}
       <main className="pb-28 pt-[76px] lg:pb-16 lg:pl-[248px] lg:pt-10">
-        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-9">{children}</div>
+        <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-9">
+          <PageErrorBoundary key={route}>{children}</PageErrorBoundary>
+        </div>
       </main>
 
       {/* ---------------- mobile bottom nav ---------------- */}

@@ -20,7 +20,11 @@ type CreateJobInput = {
   flags?: Partial<{ email: boolean; fastMode: boolean; depth: number; radius: number; lang: string; grid: boolean; extraReviews: boolean }>;
   aiPlan?: Record<string, unknown> | null;
   name?: string;
+  filters?: { minRating?: number; minReviews?: number };
 };
+
+/** JSON turns NaN into `null`, which the API rejects — only send real numbers. */
+const finite = (value: number | undefined): number | undefined => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
 
 type EngineCtx = {
   jobs: Job[];
@@ -104,17 +108,18 @@ export function EngineProvider({ children }: { children: ReactNode }) {
         query: input.query.trim(),
         name: input.name,
         location: input.city?.trim() || undefined,
-        requestedCount: input.planned,
+        requestedCount: finite(input.planned) === undefined ? undefined : Math.min(5000, Math.max(10, Math.round(input.planned as number))),
         source: input.source ?? "manual",
         aiPlan: input.aiPlan ?? null,
         config: {
           emailExtraction: flags.email ?? true,
           fastMode: flags.fastMode ?? false,
-          depth: flags.depth,
-          radiusKm: flags.radius,
-          language: flags.lang,
+          depth: finite(flags.depth) === undefined ? undefined : Math.round(flags.depth as number),
+          radiusKm: finite(flags.radius),
+          language: flags.lang || undefined,
           grid: flags.grid,
           extraReviews: flags.extraReviews,
+          ...(input.filters && Object.keys(input.filters).length > 0 ? { includeFilters: input.filters } : {}),
         },
       });
       await refresh();
