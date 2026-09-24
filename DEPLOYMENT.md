@@ -38,7 +38,7 @@ region, to keep database round-trips short), and save the database password.
 
 ### 1.2 Apply the migrations
 
-Migrations live in `supabase/migrations/0001…0011` and are applied in order.
+Migrations live in `supabase/migrations/0001…0013` and are applied in order.
 Either route works:
 
 ```bash
@@ -66,6 +66,8 @@ What the migrations do, in short:
 | `0009` | the private `zybble-exports` bucket + Realtime publication membership |
 | `0010` | seed: plans (starter/growth/scale), geo centroids, system defaults |
 | `0011` | notification → email queue hand-off |
+| `0012` | exposes `public.rate_limit_hit` to PostgREST |
+| `0013` | normalizes the engine's status string before it is stored (`public.normalize_lead_status` + updated `lead_upsert`) |
 
 The test suite exercises these migrations against a real PostgreSQL 16 engine
 (`npm test`), so a syntax or policy error is caught before it reaches a live

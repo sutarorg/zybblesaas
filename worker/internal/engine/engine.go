@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,13 +172,24 @@ type Writer struct {
 	delivered map[string]int
 	received  map[string]int
 
-	saved       int
-	firstError  error
-	onSaved     func(inputID string, created bool, duplicate bool)
-	onInputDone func(inputID string, delivered int)
+	// saved counts places written to Postgres; failed counts places Postgres
+	// refused (constraint violation, malformed value, …). One rejected row must
+	// never discard the rest of a batch, and it must never be silent: the count
+	// and the first error travel back in ScrapeResult, where the jobs layer
+	// turns them into a search event.
+	saved         int
+	failed        int
+	failedByInput map[string]int
+	firstError    error
+	onSaved       func(inputID string, created bool, duplicate bool)
+	onInputDone   func(inputID string, delivered int)
 }
 
 var _ scrapemate.ResultWriter = (*Writer)(nil)
+
+// maxLoggedWriteFailures bounds how many rejected places are logged verbosely;
+// after that the run keeps counting them and reports the total once.
+const maxLoggedWriteFailures = 10
 
 func NewWriter(st *store.Store, searchID, engineVersion string, flushSize int, flushInterval time.Duration, log *slog.Logger) *Writer {
 	if flushSize <= 0 {
@@ -195,6 +207,7 @@ func NewWriter(st *store.Store, searchID, engineVersion string, flushSize int, f
 		flushInterval: flushInterval,
 		delivered:     map[string]int{},
 		received:      map[string]int{},
+		failedByInput: map[string]int{},
 		lastFlush:     time.Now(),
 	}
 }
@@ -206,6 +219,9 @@ func (w *Writer) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 	ticker := time.NewTicker(w.flushInterval)
 	defer ticker.Stop()
 
+	// A rejected place is recorded and skipped; it must not cancel the run
+	// (scrapemate cancels every job the moment a result writer returns an
+	// error) and it must not be invisible either — see Failures().
 	flush := func() {
 		if err := w.flush(ctx); err != nil {
 			w.log.Error("flush failed", "error", err)
@@ -217,7 +233,7 @@ func (w *Writer) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 		case result, ok := <-in:
 			if !ok {
 				flush()
-				return w.firstError
+				return nil
 			}
 			entries := entriesOf(result)
 			if len(entries) == 0 {
@@ -258,7 +274,7 @@ func (w *Writer) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 			}
 		case <-ctx.Done():
 			flush()
-			return w.firstError
+			return nil
 		}
 	}
 }
@@ -274,17 +290,72 @@ func (w *Writer) flush(ctx context.Context) error {
 		return nil
 	}
 
+	var firstErr error
 	for _, item := range batch {
 		if err := w.save(ctx, item.inputID, item.entry); err != nil {
+			// A place Postgres refused is a fact to report, not a reason to
+			// throw away the places behind it in the same batch. Record it,
+			// keep going, and let the caller decide how honest to be about it.
 			w.mu.Lock()
+			w.failed++
+			if item.inputID != "" {
+				w.failedByInput[item.inputID]++
+			}
 			if w.firstError == nil {
 				w.firstError = err
 			}
+			rejected := w.failed
 			w.mu.Unlock()
-			return err
+
+			// Name the first few so a real bug is diagnosable, then stop
+			// flooding the log: the count keeps rising and the run reports it.
+			name := ""
+			if item.entry != nil {
+				name = item.entry.Title
+			}
+			switch {
+			case rejected <= maxLoggedWriteFailures:
+				w.log.Error("lead not stored",
+					"error", err,
+					"business_name", name,
+					"input", item.inputID,
+					"search", w.searchID,
+					"places_not_stored", rejected)
+			case rejected == maxLoggedWriteFailures+1:
+				w.log.Error("further rejected places are counted, not logged",
+					"search", w.searchID,
+					"error", err,
+					"places_not_stored", rejected)
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				return firstErr
+			}
 		}
 	}
-	return nil
+	return firstErr
+}
+
+// Failures reports how many places Postgres refused during this run, plus the
+// first error, so the run's outcome can say so instead of pretending success.
+func (w *Writer) Failures() (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.failed, w.firstError
+}
+
+// FailuresByInput attributes refused places to the engine pass that produced
+// them, so one pass cannot be called complete when its places never landed.
+func (w *Writer) FailuresByInput() map[string]int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make(map[string]int, len(w.failedByInput))
+	for key, value := range w.failedByInput {
+		out[key] = value
+	}
+	return out
 }
 
 func (w *Writer) save(ctx context.Context, inputID string, entry *gmaps.Entry) error {
@@ -375,6 +446,72 @@ func entriesOf(result scrapemate.Result) []*gmaps.Entry {
 	return out
 }
 
+// Status markers mirror public.normalize_lead_status in
+// supabase/migrations/0013_lead_status_normalization.sql. The database copy is
+// the one that guards the check constraint; this one keeps the payload we send
+// already honest (and correct even against a database that has not been
+// migrated yet).
+var (
+	engineStatusClosedMarkers = []string{
+		"closed", "geschlossen", "fermé", "ferme", "cerrado", "chiuso", "fechado", "gesloten",
+		"закрыто", "закрыт", "зачинено", "zamknięte", "zamkniete", "kapalı", "kapali",
+		"stängt", "stangt", "lukket", "stengt", "suljettu", "zavřeno", "zavreno",
+		"סגור", "مغلق", "κλειστ", "बंद", "已打烊", "已关闭", "已關閉", "休息", "영업 종료",
+	}
+	engineStatusClosedPrefixes = []string{"opens ", "öffnet ", "offnet ", "ouvre ", "abre ", "abre a "}
+	engineStatusOpenMarkers    = []string{
+		"open", "open now", "closing soon", "closing in",
+		"geöffnet", "geoffnet", "offen", "ouvert", "ouverte",
+		"abierto", "abierta", "aperto", "aberta", "aberto", "открыто", "открыт", "відчинено",
+		"otwarte", "açık", "acik", "öppet", "oppet", "åbent", "abent", "åpent", "avoinna",
+		"otevřeno", "otevreno", "פתוח", "مفتوح", "ανοιχτ", "खुला", "营业中", "營業中", "영업 중",
+	}
+)
+
+// normalizeLeadStatus maps what the engine reported to the stored enum:
+// "open", "closed", or "" when the engine did not really say. It never guesses
+// — an unrecognised or empty status becomes "" and is stored as 'unknown'.
+func normalizeLeadStatus(status string) string {
+	value := strings.ToLower(strings.TrimSpace(status))
+	if value == "" {
+		return ""
+	}
+
+	// Closed is checked first: "Permanently closed" and "Opens 9 AM" both
+	// describe a place that is not open right now, while "Open ⋅ Closes 10 PM"
+	// only contains "closes", not "closed".
+	for _, marker := range engineStatusClosedMarkers {
+		if strings.Contains(value, marker) {
+			return "closed"
+		}
+	}
+	for _, marker := range engineStatusClosedPrefixes {
+		if strings.HasPrefix(value, marker) {
+			return "closed"
+		}
+	}
+
+	// Open markers must be a whole word, so "opens 9 am" is not read as "open".
+	for _, marker := range engineStatusOpenMarkers {
+		if value == marker || (strings.HasPrefix(value, marker) && !startsWithASCIILetter(value[len(marker):])) {
+			return "open"
+		}
+	}
+
+	return ""
+}
+
+// startsWithASCIILetter reports whether the (already lower-cased) remainder
+// begins with an ASCII letter — the only case where a matched marker is really
+// part of a longer word.
+func startsWithASCIILetter(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	head := rest[0]
+	return head >= 'a' && head <= 'z'
+}
+
 // looksLikeUUID reports whether the string is a canonical UUID. It is used to
 // keep provider identifiers out of uuid-typed columns.
 func looksLikeUUID(value string) bool {
@@ -435,7 +572,13 @@ func PayloadFromEntry(entry *gmaps.Entry) (map[string]any, error) {
 		"longitude":       entry.Longtitude,
 		"rating":          entry.ReviewRating,
 		"review_count":    entry.ReviewCount,
-		"status":          entry.Status,
+		// The engine reports Google's own display string ("Open", "CLOSED",
+		// "Permanently closed", the localized "Geöffnet", …). public.leads
+		// stores a small enum, so send the normalized value and keep the
+		// verbatim string in raw_data below. `status_source` is what the
+		// engine actually said, for debugging and for the UI.
+		"status":        normalizeLeadStatus(entry.Status),
+		"status_source": entry.Status,
 		"open_hours":      entry.OpenHours,
 		"popular_times":   entry.PopularTimes,
 		"plus_code":       entry.PlusCode,
@@ -553,6 +696,10 @@ type ScrapeResult struct {
 	NewLeads          int
 	Duplicates        int
 	FinishedNaturally bool
+	// WriteFailures counts places the engine produced that Postgres refused.
+	// A run with write failures is not a clean run, however the counters look.
+	WriteFailures   int
+	FirstWriteError string
 }
 
 type InputOutcome struct {
@@ -560,6 +707,8 @@ type InputOutcome struct {
 	Completed  int
 	Failed     bool
 	Error      string
+	// WriteFailures counts refused places that belonged to this pass.
+	WriteFailures int
 }
 
 // RunScrape executes one scrape job: it builds a seed job per input, runs the
@@ -664,17 +813,24 @@ func RunScrape(ctx context.Context, st *store.Store, options ScrapeOptions, inpu
 	}
 
 	delivered := writer.Delivered()
+	writeFailures, firstWriteError := writer.Failures()
+	failedByInput := writer.FailuresByInput()
 	result := &ScrapeResult{
 		Inputs:            map[string]InputOutcome{},
 		Entries:           writer.Saved(),
 		FinishedNaturally: exitMonitor.Finished(),
+		WriteFailures:     writeFailures,
+	}
+	if firstWriteError != nil {
+		result.FirstWriteError = firstWriteError.Error()
 	}
 
 	foundMu.Lock()
 	for _, input := range inputs {
 		outcome := InputOutcome{
-			Discovered: found[input.ID],
-			Completed:  delivered[input.ID],
+			Discovered:    found[input.ID],
+			Completed:     delivered[input.ID],
+			WriteFailures: failedByInput[input.ID],
 		}
 		// A run that ran out of budget is only marked failed for inputs where we
 		// can prove nothing was persisted (fewer than two rows delivered). If one
