@@ -52,4 +52,6 @@ and `GET /metrics` (counters). Railway's `healthcheckPath` points at `/health`.
    `cleanup` re-enqueues searches that lost their worker.
 
 Partial results are already in Postgres because the engine's writer flushes
-every few entries/seconds, so a crash never discards scraped leads.
+every few entries/seconds, so a crash never discards scraped leads. Cleanup
+also repairs the parent search when all of its input rows are terminal but the
+worker died before writing the final `completed`/`partial`/`failed` status.

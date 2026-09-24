@@ -264,7 +264,9 @@ Nothing is simulated.
    ```
 
    On startup the worker immediately reclaims expired leases and runs one
-   `cleanup` pass, so a stale deployment cannot leave jobs stuck.
+   `cleanup` pass. Cleanup also reconciles searches whose inputs are all
+   terminal, so a crash between completing the last pass and updating the
+   parent search cannot leave the website stuck on `queued`.
 5. **Scaling out (optional).** Because claiming uses `FOR UPDATE SKIP LOCKED`,
    you can raise `numReplicas` or, better, run two services with disjoint
    `WORKER_JOB_TYPES` (e.g. one `scrape`, one
