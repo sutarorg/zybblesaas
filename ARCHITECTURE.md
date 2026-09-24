@@ -240,13 +240,21 @@ Per run:
 3. Run the engine. A Zybble `scrapemate.ResultWriter` persists every delivered
    place **as it arrives** (flush every 5 rows or 3 s) through
    `public.lead_upsert` + `public.search_register_lead`, which is also where
-   counters and usage are recorded.
+   counters and usage are recorded. The engine's own status display string
+   ("Open", "CLOSED", "Permanently closed", "Geöffnet", …) is normalized to the
+   stored enum by `public.normalize_lead_status` before it reaches
+   `leads.status`; the verbatim string stays in `raw_data` (migration 0013).
+   A place Postgres refuses is counted and skipped — it never discards the rest
+   of the batch, and it never ends the run — and is reported in the log, in a
+   `persist_failed` event and on the input row.
 4. When the run ends, write one honest outcome per input: `completed`,
    `partial` or `failed`, with `places_discovered` / `places_completed` taken
    from engine callbacks (Gosom's completion tracker announces how many places a
    seed job produced; the writer counts what it actually persisted). A run cut
    short by the safety deadline is only marked `failed` when nothing was
-   persisted for that input; otherwise it is `partial`.
+   persisted for that input; otherwise it is `partial`. A pass whose places were
+   found but not stored is `failed` when none landed, and keeps the reason on
+   the row when some did.
 5. `FinishSearch` finalises the search **only if nothing else is open**, and the
    closing call writes the in-app notification for the workspace.
 
@@ -377,6 +385,7 @@ billing is unavailable on this deployment instead of offering a broken button.
 | Worker crashes mid-scrape | Lease expires; `queue_reclaim_expired` (or the next worker's startup reclaim) re-queues the job. Leads already flushed are in Postgres; the input resumes as `partial`. |
 | Worker is redeployed | Signals are trapped, in-flight jobs get a grace period (`WORKER_SHUTDOWN_TIMEOUT`), and any job that is still running is reclaimed by lease. |
 | Postgres connection is lost | pgx pool reconnects; a job that cannot make progress fails, backs off and retries up to `max_attempts`. |
+| A scraped place cannot be stored | `public.lead_upsert` raises (constraint violation, malformed value); the writer logs the place, counts it, keeps the remaining batch, writes a `persist_failed` search event and marks the pass `failed` (nothing stored) or records the loss on the row (some stored). Progress and counters only ever reflect what is really in Postgres. |
 | Gemini is down or the key is missing | AI jobs fail with an explicit error, quota reservation is released for retry, and the API returns `503 not_configured` / `502 provider` — no fabricated analysis is written. |
 | Razorpay webhook is delayed | The user's subscription state is whatever the database last received; the UI shows the verified state, and `verify` covers the interactive path. Duplicate webhooks are ignored by event id. |
 | Card payment is halted | Razorpay sends `subscription.halted`; entitlements fall back to the plan's grace behaviour rather than inventing an active subscription. |

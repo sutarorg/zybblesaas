@@ -238,6 +238,15 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		return map[string]any{"paused": true, "inputs_reopened": count, "entries": result.Entries}, nil
 	}
 
+	if result.WriteFailures > 0 {
+		// Places the engine found but Postgres refused. Say so where the user
+		// can see it instead of letting a run look clean: this is the exact
+		// failure that used to end as "38 places found, 0 leads displayed".
+		_ = w.Store.Event(ctx, searchID, "persist_failed", "error",
+			fmt.Sprintf("%d place%s could not be stored (%s)", result.WriteFailures, plural(result.WriteFailures), nonEmpty(result.FirstWriteError, "unknown database error")),
+			map[string]any{"places": result.WriteFailures, "error": result.FirstWriteError, "worker": w.Config.WorkerID})
+	}
+
 	completed, failed := 0, 0
 	for _, input := range inputs {
 		outcome, ok := result.Inputs[input.ID]
@@ -253,8 +262,27 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 			}
 			continue
 		}
+		if outcome.WriteFailures > 0 && delivered == 0 {
+			// The pass ran, the engine found places, and none of them landed:
+			// for this pass that is a failure, and the reason is the database.
+			failed++
+			message := fmt.Sprintf("%d place%s could not be stored (%s)",
+				outcome.WriteFailures, plural(outcome.WriteFailures), nonEmpty(result.FirstWriteError, "unknown database error"))
+			if err := w.Store.InputProgress(ctx, searchID, input.ID, "failed", &discovered, &delivered, &message); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		completed++
-		if err := w.Store.InputProgress(ctx, searchID, input.ID, "completed", &discovered, &delivered, nil); err != nil {
+		// A pass that stored some places but lost others stays completed and
+		// keeps the error on the row — the loss is recorded, never rounded off.
+		var note *string
+		if outcome.WriteFailures > 0 {
+			message := fmt.Sprintf("%d place%s could not be stored (%s)",
+				outcome.WriteFailures, plural(outcome.WriteFailures), nonEmpty(result.FirstWriteError, "unknown database error"))
+			note = &message
+		}
+		if err := w.Store.InputProgress(ctx, searchID, input.ID, "completed", &discovered, &delivered, note); err != nil {
 			return nil, err
 		}
 	}
@@ -270,7 +298,7 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 
 	_ = w.Store.Event(ctx, searchID, "engine_finished", levelForStatus(status),
 		fmt.Sprintf("Engine pass finished: %d pass%s completed, %d failed", completed, plural(completed), failed),
-		map[string]any{"entries": result.Entries, "new_leads": result.NewLeads, "duplicates": result.Duplicates})
+		map[string]any{"entries": result.Entries, "new_leads": result.NewLeads, "duplicates": result.Duplicates, "places_not_stored": result.WriteFailures})
 
 	// Other engine passes may still be queued or running: the search is not over
 	// until the last one closes it. Only that call notifies the workspace.
@@ -281,6 +309,7 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 			"inputs_completed":   completed,
 			"inputs_failed":      failed,
 			"entries_persisted":  result.Entries,
+			"places_not_stored":  result.WriteFailures,
 			"finished_naturally": result.FinishedNaturally,
 			"worker":             w.Config.WorkerID,
 		}, nil
@@ -316,6 +345,7 @@ func (w *Worker) scrape(ctx context.Context, job store.Job) (map[string]any, err
 		"inputs_completed":   completed,
 		"inputs_failed":      failed,
 		"entries_persisted":  result.Entries,
+		"places_not_stored":  result.WriteFailures,
 		"finished_naturally": result.FinishedNaturally,
 		"worker":             w.Config.WorkerID,
 	}, nil

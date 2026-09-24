@@ -37,7 +37,7 @@ policies, explicit grants, `security_invoker` views, `workspace_id` on every
 tenant row, money in minor units with a currency, and `leads.raw_data` keeping
 the original engine payload beside the normalised columns.
 
-*Evidence:* `supabase/migrations/0001…0011`, `tests/migrations.test.ts`,
+*Evidence:* `supabase/migrations/0001…0013`, `tests/migrations.test.ts`,
 `tests/security.test.ts`, `scripts/schema-dump.ts`.
 
 ## 3. Realtime delivery with a polling fallback
