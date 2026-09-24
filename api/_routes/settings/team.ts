@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query, rpc } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { audit } from "../../_lib/audit";
-import { env } from "../../_lib/env";
-import { badRequest, conflict, forbidden, notFound, quotaExceeded } from "../../_lib/errors";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query, rpc } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { audit } from "../../_lib/audit.js";
+import { env } from "../../_lib/env.js";
+import { badRequest, conflict, forbidden, notFound, quotaExceeded } from "../../_lib/errors.js";
 
 const inviteSchema = z.object({ action: z.literal("invite"), email: z.string().email().max(200), role: z.enum(["admin", "member", "viewer"]).default("member") });
 const roleSchema = z.object({ action: z.literal("role"), memberId: z.string().uuid(), role: z.enum(["owner", "admin", "member", "viewer"]) });

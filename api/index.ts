@@ -1,1 +1,1 @@
-export { default } from "./_lib/router";
+export { default } from "./_lib/router.js";

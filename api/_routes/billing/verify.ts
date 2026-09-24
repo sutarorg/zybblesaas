@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { razorpay, verifyCheckoutSignature } from "../../_lib/razorpay";
-import { audit } from "../../_lib/audit";
-import { badRequest, conflict, planRequired } from "../../_lib/errors";
-import { syncSubscription } from "./subscription";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { razorpay, verifyCheckoutSignature } from "../../_lib/razorpay.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, conflict, planRequired } from "../../_lib/errors.js";
+import { syncSubscription } from "./subscription.js";
 
 const bodySchema = z.object({
   razorpay_payment_id: z.string().min(5).max(64),

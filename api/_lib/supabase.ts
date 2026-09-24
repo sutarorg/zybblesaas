@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient, type PostgrestError } from "@supabase/supabase-js";
-import { env } from "./env";
-import { ApiError, internalError } from "./errors";
+import { env } from "./env.js";
+import { ApiError, internalError } from "./errors.js";
 
 /**
  * Server-side Supabase client (secret key → `service_role`).

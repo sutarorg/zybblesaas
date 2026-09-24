@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { audit } from "../../_lib/audit";
-import { badRequest } from "../../_lib/errors";
-import { publicPlan } from "../../_lib/plans";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest } from "../../_lib/errors.js";
+import { publicPlan } from "../../_lib/plans.js";
 
 const patchSchema = z.object({
   workspace: z

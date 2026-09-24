@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { audit } from "../../_lib/audit";
-import { badRequest, notFound } from "../../_lib/errors";
-import { toLeadDetail, type LeadRow } from "../../_lib/serialize";
-import { leadBelongsToWorkspace } from "./index";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, notFound } from "../../_lib/errors.js";
+import { toLeadDetail, type LeadRow } from "../../_lib/serialize.js";
+import { leadBelongsToWorkspace } from "./index.js";
 
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("add_to_list"), listId: z.string().uuid().optional(), listSlug: z.string().optional() }),

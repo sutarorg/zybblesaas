@@ -1,5 +1,5 @@
-import { env } from "./env";
-import { providerError, notConfigured } from "./errors";
+import { env } from "./env.js";
+import { providerError, notConfigured } from "./errors.js";
 
 /**
  * Google Gemini via the Generative Language REST API.

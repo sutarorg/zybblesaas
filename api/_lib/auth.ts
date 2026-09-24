@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { admin, query, rpcRows } from "./supabase";
-import { unauthorized, forbidden, badRequest, rateLimited } from "./errors";
-import type { IncomingRequest, RouteOptions } from "./types";
+import { admin, query, rpcRows } from "./supabase.js";
+import { unauthorized, forbidden, badRequest, rateLimited } from "./errors.js";
+import type { IncomingRequest, RouteOptions } from "./types.js";
 
 export type WorkspaceRole = "owner" | "admin" | "member" | "viewer";
 

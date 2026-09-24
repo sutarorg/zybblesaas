@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { admin } from "./supabase";
-import type { RouteContext } from "./http";
+import { admin } from "./supabase.js";
+import type { RouteContext } from "./http.js";
 
 function compact(ip: string | undefined): string | null {
   if (!ip) return null;

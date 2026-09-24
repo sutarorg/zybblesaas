@@ -1,7 +1,7 @@
-import { ApiError, internalError } from "./errors";
-import { assertRole, resolveCaller, type CallerContext, type WorkspaceRole } from "./auth";
-import { rpcRows } from "./supabase";
-import type { Handler, IncomingRequest, OutgoingResponse, RouteOptions } from "./types";
+import { ApiError, internalError } from "./errors.js";
+import { assertRole, resolveCaller, type CallerContext, type WorkspaceRole } from "./auth.js";
+import { rpcRows } from "./supabase.js";
+import type { Handler, IncomingRequest, OutgoingResponse, RouteOptions } from "./types.js";
 
 export type RouteContext = {
   req: IncomingRequest;

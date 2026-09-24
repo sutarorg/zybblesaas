@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { route, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { assertAiEnabled, entitlements, queuePriority } from "../../_lib/entitlements";
-import { enqueue } from "../../_lib/queue";
-import { audit } from "../../_lib/audit";
-import { badRequest, notFound, quotaExceeded } from "../../_lib/errors";
+import { route, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { assertAiEnabled, entitlements, queuePriority } from "../../_lib/entitlements.js";
+import { enqueue } from "../../_lib/queue.js";
+import { audit } from "../../_lib/audit.js";
+import { badRequest, notFound, quotaExceeded } from "../../_lib/errors.js";
 
 const bodySchema = z
   .object({

@@ -1,6 +1,6 @@
-import { route, ok } from "../_lib/http";
-import { nearbyPlaces } from "../_lib/geo";
-import { badRequest } from "../_lib/errors";
+import { route, ok } from "../_lib/http.js";
+import { nearbyPlaces } from "../_lib/geo.js";
+import { badRequest } from "../_lib/errors.js";
 
 /**
  * Location lookup used by the search form and the AI plan review step.

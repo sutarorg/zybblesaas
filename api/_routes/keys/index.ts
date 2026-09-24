@@ -1,11 +1,11 @@
 import { randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
-import { route, ok, created } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { entitlements } from "../../_lib/entitlements";
-import { audit } from "../../_lib/audit";
-import { planRequired } from "../../_lib/errors";
+import { route, ok, created } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { entitlements } from "../../_lib/entitlements.js";
+import { audit } from "../../_lib/audit.js";
+import { planRequired } from "../../_lib/errors.js";
 
 const SCOPES = ["searches:read", "searches:write", "leads:read", "leads:write", "lists:read", "lists:write", "exports:read", "exports:write"] as const;
 

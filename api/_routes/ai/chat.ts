@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { route, ok } from "../../_lib/http";
-import { parse } from "../../_lib/validate";
-import { admin, query } from "../../_lib/supabase";
-import { assertAiEnabled, entitlements, reserveUsage } from "../../_lib/entitlements";
-import { generate, untrusted } from "../../_lib/gemini";
-import { env } from "../../_lib/env";
-import { uniqueSlug } from "../../_lib/slugs";
-import { inputHash, startRun, finishRun, aiQuota } from "../../_lib/ai-runs";
-import { audit } from "../../_lib/audit";
-import { notFound, quotaExceeded } from "../../_lib/errors";
+import { route, ok } from "../../_lib/http.js";
+import { parse } from "../../_lib/validate.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { assertAiEnabled, entitlements, reserveUsage } from "../../_lib/entitlements.js";
+import { generate, untrusted } from "../../_lib/gemini.js";
+import { env } from "../../_lib/env.js";
+import { uniqueSlug } from "../../_lib/slugs.js";
+import { inputHash, startRun, finishRun, aiQuota } from "../../_lib/ai-runs.js";
+import { audit } from "../../_lib/audit.js";
+import { notFound, quotaExceeded } from "../../_lib/errors.js";
 
 const PROMPT_VERSION = "chat@1";
 

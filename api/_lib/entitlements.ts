@@ -1,6 +1,6 @@
-import { rpc } from "./supabase";
-import { quotaExceeded, planRequired, notFound } from "./errors";
-import { features } from "./env";
+import { rpc } from "./supabase.js";
+import { quotaExceeded, planRequired, notFound } from "./errors.js";
+import { features } from "./env.js";
 
 export type PlanSnapshot = {
   id: string;

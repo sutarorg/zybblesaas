@@ -1,7 +1,7 @@
-import { route, ok } from "../../_lib/http";
-import { admin, query } from "../../_lib/supabase";
-import { badRequest } from "../../_lib/errors";
-import { toLeadListItem, type LeadRow } from "../../_lib/serialize";
+import { route, ok } from "../../_lib/http.js";
+import { admin, query } from "../../_lib/supabase.js";
+import { badRequest } from "../../_lib/errors.js";
+import { toLeadListItem, type LeadRow } from "../../_lib/serialize.js";
 
 const SORTS: Record<string, { column: string; ascending: boolean }> = {
   newest: { column: "first_seen_at", ascending: false },
